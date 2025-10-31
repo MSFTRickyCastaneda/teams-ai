@@ -32,9 +32,6 @@ protected override async Task OnMessageActivityAsync(
 
 ### Teams AI Library v2 Approach
 
-<Tabs>
-  <TabItem value="Controller" label="Controller Style" default>
-
     ```csharp
     [Message]
     public async Task OnMessage(
@@ -50,10 +47,9 @@ protected override async Task OnMessageActivityAsync(
         // Access conversation ID
         var conversationId = activity.Conversation.Id;
     }
-    
+
     ```
-  </TabItem>
-  <TabItem value="Minimal" label="Minimal Style">
+
     ```csharp
     app.OnMessage(async context =>
     {
@@ -67,8 +63,7 @@ protected override async Task OnMessageActivityAsync(
         var conversationId = context.Activity.Conversation.Id;
     });
     ```
-  </TabItem>
-</Tabs>
+
 
 ## Key Differences
 
