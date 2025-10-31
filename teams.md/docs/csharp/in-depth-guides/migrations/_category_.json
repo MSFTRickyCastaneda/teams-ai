@@ -1,0 +1,8 @@
+{
+  "label": "Migrations",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Migration guides for moving to Teams AI Library v2 from older versions and other frameworks."
+  }
+}

@@ -1,0 +1,674 @@
+---
+sidebar_position: 6
+summary: Migrate BotBuilder middleware patterns to Teams AI Library v2's modern ASP.NET Core middleware and plugin system.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Middleware
+
+BotBuilder uses custom middleware that runs in the bot's activity processing pipeline. Teams AI Library v2 integrates with standard ASP.NET Core middleware and introduces a plugin system for bot-specific processing.
+
+## Overview
+
+| BotBuilder | Teams AI v2 |
+|------------|-------------|
+| Custom `IMiddleware` interface | ASP.NET Core middleware |
+| Adapter middleware collection | Standard middleware pipeline |
+| `OnTurnAsync` processing | Plugin lifecycle hooks |
+| Manual middleware ordering | Natural middleware ordering |
+
+## Migration Patterns
+
+### Logging Middleware
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+
+    public class LoggingMiddleware : IMiddleware
+    {
+        private readonly ILogger<LoggingMiddleware> _logger;
+
+        public LoggingMiddleware(ILogger<LoggingMiddleware> logger)
+        {
+            _logger = logger;
+        }
+
+        public async Task OnTurnAsync(
+            ITurnContext turnContext,
+            NextDelegate next,
+            CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation(
+                "Received {ActivityType} activity from {UserId}",
+                turnContext.Activity.Type,
+                turnContext.Activity.From.Id);
+
+            var startTime = DateTime.UtcNow;
+
+            await next(cancellationToken);
+
+            var duration = DateTime.UtcNow - startTime;
+            _logger.LogInformation(
+                "Processed activity in {Duration}ms",
+                duration.TotalMilliseconds);
+        }
+    }
+
+    // Startup.cs
+    services.AddTransient<LoggingMiddleware>();
+
+    // Add to adapter
+    var adapter = serviceProvider.GetService<IBotFrameworkHttpAdapter>();
+    ((BotFrameworkAdapter)adapter).Use(serviceProvider.GetService<LoggingMiddleware>());
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Apps;
+    using Microsoft.Teams.Apps.Plugins;
+
+    public class LoggingPlugin : ITeamsPlugin
+    {
+        private readonly ILogger<LoggingPlugin> _logger;
+
+        public LoggingPlugin(ILogger<LoggingPlugin> logger)
+        {
+            _logger = logger;
+        }
+
+        public Task OnActivityAsync(
+            ActivityContext context,
+            Func<Task> next,
+            CancellationToken cancellationToken = default)
+        {
+            _logger.LogInformation(
+                "Received {ActivityType} activity from {UserId}",
+                context.Activity.Type,
+                context.Activity.From?.Id);
+
+            var startTime = DateTime.UtcNow;
+
+            await next();
+
+            var duration = DateTime.UtcNow - startTime;
+            _logger.LogInformation(
+                "Processed activity in {Duration}ms",
+                duration.TotalMilliseconds);
+        }
+    }
+
+    // Program.cs
+    builder.Services.AddTransient<LoggingPlugin>();
+
+    builder.AddTeams(options =>
+    {
+        options.Plugins.Add<LoggingPlugin>();
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+### Authentication Middleware
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    public class AuthenticationMiddleware : IMiddleware
+    {
+        private readonly IConfiguration _configuration;
+
+        public AuthenticationMiddleware(IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
+
+        public async Task OnTurnAsync(
+            ITurnContext turnContext,
+            NextDelegate next,
+            CancellationToken cancellationToken = default)
+        {
+            // Check if user is authorized
+            var allowedUsers = _configuration
+                .GetSection("AllowedUsers")
+                .Get<string[]>();
+
+            if (!allowedUsers.Contains(turnContext.Activity.From.Id))
+            {
+                await turnContext.SendActivityAsync(
+                    "You are not authorized to use this bot.",
+                    cancellationToken: cancellationToken);
+                return;
+            }
+
+            await next(cancellationToken);
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    public class AuthenticationPlugin : ITeamsPlugin
+    {
+        private readonly IConfiguration _configuration;
+
+        public AuthenticationPlugin(IConfiguration configuration)
+        {
+            _configuration = configuration;
+        }
+
+        public async Task OnActivityAsync(
+            ActivityContext context,
+            Func<Task> next,
+            CancellationToken cancellationToken = default)
+        {
+            // Check if user is authorized
+            var allowedUsers = _configuration
+                .GetSection("AllowedUsers")
+                .Get<string[]>();
+
+            if (!allowedUsers.Contains(context.Activity.From?.Id))
+            {
+                await context.SendActivityAsync(
+                    "You are not authorized to use this bot.");
+                return;
+            }
+
+            await next();
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Rate Limiting Middleware
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    public class RateLimitingMiddleware : IMiddleware
+    {
+        private readonly Dictionary<string, DateTime> _lastRequestTime = new();
+        private readonly TimeSpan _minimumInterval = TimeSpan.FromSeconds(2);
+
+        public async Task OnTurnAsync(
+            ITurnContext turnContext,
+            NextDelegate next,
+            CancellationToken cancellationToken = default)
+        {
+            var userId = turnContext.Activity.From.Id;
+
+            if (_lastRequestTime.TryGetValue(userId, out var lastTime))
+            {
+                var timeSinceLastRequest = DateTime.UtcNow - lastTime;
+                if (timeSinceLastRequest < _minimumInterval)
+                {
+                    await turnContext.SendActivityAsync(
+                        "Please slow down. Try again in a moment.",
+                        cancellationToken: cancellationToken);
+                    return;
+                }
+            }
+
+            _lastRequestTime[userId] = DateTime.UtcNow;
+            await next(cancellationToken);
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    public class RateLimitingPlugin : ITeamsPlugin
+    {
+        private readonly Dictionary<string, DateTime> _lastRequestTime = new();
+        private readonly TimeSpan _minimumInterval = TimeSpan.FromSeconds(2);
+
+        public async Task OnActivityAsync(
+            ActivityContext context,
+            Func<Task> next,
+            CancellationToken cancellationToken = default)
+        {
+            var userId = context.Activity.From?.Id;
+            if (userId == null)
+            {
+                await next();
+                return;
+            }
+
+            if (_lastRequestTime.TryGetValue(userId, out var lastTime))
+            {
+                var timeSinceLastRequest = DateTime.UtcNow - lastTime;
+                if (timeSinceLastRequest < _minimumInterval)
+                {
+                    await context.SendActivityAsync(
+                        "Please slow down. Try again in a moment.");
+                    return;
+                }
+            }
+
+            _lastRequestTime[userId] = DateTime.UtcNow;
+            await next();
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Plugin Lifecycle Hooks
+
+Teams AI v2 plugins can hook into various lifecycle events:
+
+```csharp showLineNumbers
+public class ComprehensivePlugin : ITeamsPlugin
+{
+    private readonly ILogger<ComprehensivePlugin> _logger;
+
+    public ComprehensivePlugin(ILogger<ComprehensivePlugin> logger)
+    {
+        _logger = logger;
+    }
+
+    // Called when the application starts
+    public Task OnInitializeAsync(CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Plugin initialized");
+        return Task.CompletedTask;
+    }
+
+    // Called before processing an activity
+    public async Task OnActivityAsync(
+        ActivityContext context,
+        Func<Task> next,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Before activity processing");
+        await next();
+        _logger.LogInformation("After activity processing");
+    }
+
+    // Called after an activity is sent
+    public Task OnActivitySentAsync(
+        ActivityContext context,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation(
+            "Activity sent: {ActivityId}", 
+            context.Activity.Id);
+        return Task.CompletedTask;
+    }
+
+    // Called when an error occurs
+    public Task OnErrorAsync(
+        ActivityContext context,
+        Exception exception,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogError(
+            exception,
+            "Error processing activity from {UserId}",
+            context.Activity.From?.Id);
+        return Task.CompletedTask;
+    }
+
+    // Called when the application stops
+    public Task OnShutdownAsync(CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Plugin shutting down");
+        return Task.CompletedTask;
+    }
+}
+```
+
+## ASP.NET Core Middleware Integration
+
+Teams AI v2 allows you to use standard ASP.NET Core middleware:
+
+```csharp showLineNumbers title="Program.cs"
+var builder = WebApplication.CreateBuilder(args);
+
+builder.AddTeams();
+
+var app = builder.Build();
+
+// Standard ASP.NET Core middleware
+app.UseHttpsRedirection();
+app.UseCors();
+
+// Custom HTTP middleware
+app.Use(async (context, next) =>
+{
+    var logger = context.RequestServices
+        .GetRequiredService<ILogger<Program>>();
+    
+    logger.LogInformation(
+        "HTTP {Method} request to {Path}",
+        context.Request.Method,
+        context.Request.Path);
+
+    await next();
+});
+
+// Rate limiting middleware (ASP.NET Core 7+)
+app.UseRateLimiter();
+
+// Teams middleware
+app.UseTeams();
+
+app.Run();
+```
+
+## Telemetry and Monitoring
+
+### Application Insights Integration
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    public class TelemetryMiddleware : IMiddleware
+    {
+        private readonly TelemetryClient _telemetryClient;
+
+        public TelemetryMiddleware(TelemetryClient telemetryClient)
+        {
+            _telemetryClient = telemetryClient;
+        }
+
+        public async Task OnTurnAsync(
+            ITurnContext turnContext,
+            NextDelegate next,
+            CancellationToken cancellationToken = default)
+        {
+            var startTime = DateTime.UtcNow;
+
+            try
+            {
+                await next(cancellationToken);
+
+                _telemetryClient.TrackEvent("ActivityProcessed", new Dictionary<string, string>
+                {
+                    ["ActivityType"] = turnContext.Activity.Type,
+                    ["UserId"] = turnContext.Activity.From.Id,
+                    ["Duration"] = (DateTime.UtcNow - startTime).TotalMilliseconds.ToString()
+                });
+            }
+            catch (Exception ex)
+            {
+                _telemetryClient.TrackException(ex);
+                throw;
+            }
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    public class TelemetryPlugin : ITeamsPlugin
+    {
+        private readonly TelemetryClient _telemetryClient;
+
+        public TelemetryPlugin(TelemetryClient telemetryClient)
+        {
+            _telemetryClient = telemetryClient;
+        }
+
+        public async Task OnActivityAsync(
+            ActivityContext context,
+            Func<Task> next,
+            CancellationToken cancellationToken = default)
+        {
+            var startTime = DateTime.UtcNow;
+
+            try
+            {
+                await next();
+
+                _telemetryClient.TrackEvent("ActivityProcessed", new Dictionary<string, string>
+                {
+                    ["ActivityType"] = context.Activity.Type,
+                    ["UserId"] = context.Activity.From?.Id ?? "unknown",
+                    ["Duration"] = (DateTime.UtcNow - startTime).TotalMilliseconds.ToString()
+                });
+            }
+            catch (Exception ex)
+            {
+                _telemetryClient.TrackException(ex);
+                throw;
+            }
+        }
+    }
+
+    // Program.cs
+    builder.Services.AddApplicationInsightsTelemetry(
+        builder.Configuration["ApplicationInsights:ConnectionString"]);
+    ```
+  </TabItem>
+</Tabs>
+
+## Error Handling Middleware
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    adapter.OnTurnError = async (turnContext, exception) =>
+    {
+        logger.LogError(exception, "Turn error");
+        
+        await turnContext.SendActivityAsync(
+            "Sorry, something went wrong!",
+            cancellationToken: CancellationToken.None);
+    };
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    public class ErrorHandlingPlugin : ITeamsPlugin
+    {
+        private readonly ILogger<ErrorHandlingPlugin> _logger;
+
+        public ErrorHandlingPlugin(ILogger<ErrorHandlingPlugin> logger)
+        {
+            _logger = logger;
+        }
+
+        public Task OnErrorAsync(
+            ActivityContext context,
+            Exception exception,
+            CancellationToken cancellationToken = default)
+        {
+            _logger.LogError(exception, "Activity processing error");
+            
+            return context.SendActivityAsync(
+                "Sorry, something went wrong!");
+        }
+    }
+
+    // Or use global error handling
+    builder.AddTeams(options =>
+    {
+        options.OnError = async (context, exception) =>
+        {
+            logger.LogError(exception, "Global error handler");
+            await context.SendActivityAsync("An error occurred.");
+        };
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+## Complete Migration Example
+
+Here's a complete example showing multiple middleware patterns:
+
+```csharp showLineNumbers title="Program.cs"
+using Microsoft.ApplicationInsights;
+using Microsoft.Teams.Apps;
+using Microsoft.Teams.Apps.Plugins;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add Application Insights
+builder.Services.AddApplicationInsightsTelemetry();
+
+// Register plugins
+builder.Services.AddTransient<LoggingPlugin>();
+builder.Services.AddTransient<AuthenticationPlugin>();
+builder.Services.AddTransient<TelemetryPlugin>();
+builder.Services.AddTransient<RateLimitingPlugin>();
+
+// Configure Teams with plugins
+builder.AddTeams(options =>
+{
+    options.Plugins.Add<LoggingPlugin>();
+    options.Plugins.Add<AuthenticationPlugin>();
+    options.Plugins.Add<TelemetryPlugin>();
+    options.Plugins.Add<RateLimitingPlugin>();
+
+    // Global error handler
+    options.OnError = async (context, exception) =>
+    {
+        var logger = context.Services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(exception, "Unhandled error");
+        await context.SendActivityAsync("An unexpected error occurred.");
+    };
+});
+
+builder.Services.AddTransient<MainController>();
+
+var app = builder.Build();
+
+// ASP.NET Core middleware
+app.UseHttpsRedirection();
+
+// Teams middleware
+app.UseTeams();
+
+app.Run();
+```
+
+```csharp showLineNumbers title="LoggingPlugin.cs"
+public class LoggingPlugin : ITeamsPlugin
+{
+    private readonly ILogger<LoggingPlugin> _logger;
+
+    public LoggingPlugin(ILogger<LoggingPlugin> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task OnActivityAsync(
+        ActivityContext context,
+        Func<Task> next,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation(
+            "Processing {ActivityType} from {User} in {Conversation}",
+            context.Activity.Type,
+            context.Activity.From?.Name ?? "Unknown",
+            context.Activity.Conversation?.Id ?? "Unknown");
+
+        await next();
+    }
+
+    public Task OnActivitySentAsync(
+        ActivityContext context,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation(
+            "Sent activity {ActivityId}",
+            context.Activity.Id);
+        return Task.CompletedTask;
+    }
+}
+```
+
+## Plugin Ordering
+
+Unlike BotBuilder middleware where order matters in the adapter, Teams AI v2 plugins execute in registration order:
+
+```csharp
+builder.AddTeams(options =>
+{
+    // Executes first
+    options.Plugins.Add<LoggingPlugin>();
+    
+    // Executes second
+    options.Plugins.Add<AuthenticationPlugin>();
+    
+    // Executes third
+    options.Plugins.Add<RateLimitingPlugin>();
+    
+    // Executes last
+    options.Plugins.Add<TelemetryPlugin>();
+});
+```
+
+## Testing
+
+Plugins are easier to test than BotBuilder middleware:
+
+```csharp showLineNumbers
+public class LoggingPluginTests
+{
+    [Fact]
+    public async Task OnActivityAsync_LogsActivityInformation()
+    {
+        // Arrange
+        var loggerMock = new Mock<ILogger<LoggingPlugin>>();
+        var plugin = new LoggingPlugin(loggerMock.Object);
+        
+        var context = new ActivityContext
+        {
+            Activity = new Activity
+            {
+                Type = ActivityTypes.Message,
+                From = new ChannelAccount { Name = "Test User" },
+                Conversation = new ConversationAccount { Id = "test-conv" }
+            }
+        };
+
+        var nextCalled = false;
+        Func<Task> next = () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        };
+
+        // Act
+        await plugin.OnActivityAsync(context, next);
+
+        // Assert
+        Assert.True(nextCalled);
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString().Contains("Test User")),
+                null,
+                It.IsAny<Func<It.IsAnyType, Exception, string>>()),
+            Times.Once);
+    }
+}
+```
+
+## Key Benefits
+
+1. **Standard Patterns**: Uses ASP.NET Core middleware patterns
+2. **Better Lifecycle**: More granular lifecycle hooks
+3. **Easier Testing**: Simpler to mock and test
+4. **Dependency Injection**: Full DI support throughout
+5. **Clear Ordering**: Explicit plugin registration order
+6. **Error Handling**: Multiple error handling options
+
+## Next Steps
+
+- **[Testing](./testing)** - Write tests for your migrated bot
+- **[Deployment](./deployment)** - Deploy your Teams AI application
+
+## Additional Resources
+
+- [ASP.NET Core Middleware](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/)
+- [Application Insights](https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview)
+- [Plugin System Documentation](../../essentials/app-basics#plugins)

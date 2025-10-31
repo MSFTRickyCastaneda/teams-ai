@@ -1,0 +1,640 @@
+---
+sidebar_position: 4
+summary: Migrate from BotBuilder's complex OAuthPrompt dialogs to Teams AI's simple SignIn/SignOut methods with built-in SSO support.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# User Authentication
+
+One of the most dramatic simplifications in Teams AI Library v2 is user authentication. BotBuilder requires complex dialog management with `OAuthPrompt`, `WaterfallDialog`, and state management. Teams AI v2 reduces this to simple `SignIn()` and `SignOut()` method calls.
+
+## Overview
+
+**BotBuilder approach:**
+- Create `OAuthPrompt` dialog
+- Manage dialog state with `ConversationState` and `UserState`
+- Handle waterfall steps
+- Implement interrupt logic for sign-out
+- Manually manage token lifecycle
+
+**Teams AI v2 approach:**
+- Configure OAuth connection name
+- Call `SignIn()` method
+- Subscribe to `OnSignIn` event
+- Use `IsSignedIn` property
+- Call `SignOut()` method
+
+## Complete Migration Example
+
+<function_calls>
+<invoke name="create_file">
+<parameter name="content">---
+sidebar_position: 5
+summary: Migrate BotBuilder state management patterns to Teams AI Library v2's simplified IStorage interface.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# State Management
+
+BotBuilder uses a complex state management system with `ConversationState`, `UserState`, state property accessors, and manual save operations. Teams AI Library v2 simplifies this with an intuitive `IStorage<string, object>` interface that automatically handles persistence.
+
+## Overview
+
+The key differences:
+
+| BotBuilder | Teams AI v2 |
+|------------|-------------|
+| `ConversationState` / `UserState` | `IStorage<string, object>` |
+| `CreateProperty<T>()` | `Get<T>()` / `Set()` |
+| Manual `SaveChangesAsync()` | Automatic persistence |
+| State accessors | Direct key-value access |
+| Complex setup | Built-in and ready to use |
+
+## Basic State Management
+
+### Storing and Retrieving Data
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    using Microsoft.Bot.Builder;
+-
+-    public class CounterBot : ActivityHandler
+-    {
+-        private readonly BotState _conversationState;
+-        private readonly IStatePropertyAccessor<CounterState> _counterAccessor;
+-
+-        public CounterBot(ConversationState conversationState)
+-        {
+-            _conversationState = conversationState;
+-            _counterAccessor = conversationState.CreateProperty<CounterState>("CounterState");
+-        }
+-
+-        protected override async Task OnMessageActivityAsync(
+-            ITurnContext<IMessageActivity> turnContext,
+-            CancellationToken cancellationToken)
+-        {
+-            var state = await _counterAccessor.GetAsync(
+-                turnContext,
+-                () => new CounterState { Count = 0 },
+-                cancellationToken);
+-
+-            state.Count++;
+-
+-            await turnContext.SendActivityAsync(
+-                $"Count: {state.Count}",
+-                cancellationToken: cancellationToken);
+-
+-            await _conversationState.SaveChangesAsync(
+-                turnContext,
+-                force: false,
+-                cancellationToken: cancellationToken);
+-        }
+-    }
+-
+-    public class CounterState
+-    {
+-        public int Count { get; set; }
+-    }
+    // highlight-error-end
+    // highlight-success-start
++    [TeamsController("main")]
++    public class MainController
++    {
++        [Message]
++        public async Task OnMessage(
++            [Context] MessageActivity activity,
++            [Context] IContext.Client client,
++            [Context] IStorage<string, object> storage)
++        {
++            var count = storage.Get<int>("Count");
++            count++;
++            storage.Set("Count", count);
++
++            await client.Send($"Count: {count}");
++        }
++    }
++    // highlight-success-end
++    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+
+    public class CounterBot : ActivityHandler
+    {
+        private readonly BotState _conversationState;
+        private readonly IStatePropertyAccessor<CounterState> _counterAccessor;
+
+        public CounterBot(ConversationState conversationState)
+        {
+            _conversationState = conversationState;
+            _counterAccessor = conversationState.CreateProperty<CounterState>("CounterState");
+        }
+
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            // highlight-start
+            var state = await _counterAccessor.GetAsync(
+                turnContext,
+                () => new CounterState { Count = 0 },
+                cancellationToken);
+
+            state.Count++;
+            // highlight-end
+
+            await turnContext.SendActivityAsync(
+                $"Count: {state.Count}",
+                cancellationToken: cancellationToken);
+
+            // highlight-start
+            await _conversationState.SaveChangesAsync(
+                turnContext,
+                force: false,
+                cancellationToken: cancellationToken);
+            // highlight-end
+        }
+    }
+
+    public class CounterState
+    {
+        public int Count { get; set; }
+    }
+
+    // Startup.cs
+    services.AddSingleton<IStorage, MemoryStorage>();
+    services.AddSingleton<ConversationState>();
+    services.AddSingleton<CounterBot>();
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2">
+    ```csharp showLineNumbers
+    [TeamsController("main")]
+    public class MainController
+    {
+        [Message]
+        public async Task OnMessage(
+            [Context] MessageActivity activity,
+            [Context] IContext.Client client,
+            [Context] IStorage<string, object> storage)
+        {
+            // highlight-start
+            var count = storage.Get<int>("Count");
+            count++;
+            storage.Set("Count", count);
+            // highlight-end
+
+            await client.Send($"Count: {count}");
+            // No manual save needed - automatic!
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Storage Methods
+
+### Get with Default Value
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var state = await _accessor.GetAsync(
+        turnContext,
+        () => new UserProfile { Name = "Guest" },
+        cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var profile = storage.Get("UserProfile", 
+        defaultValue: new UserProfile { Name = "Guest" });
+    ```
+  </TabItem>
+</Tabs>
+
+### Check if Key Exists
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var state = await _accessor.GetAsync(
+        turnContext,
+        () => null,
+        cancellationToken);
+    
+    if (state != null)
+    {
+        // Key exists
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    if (storage.Has("UserProfile"))
+    {
+        var profile = storage.Get<UserProfile>("UserProfile");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Delete State
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    await _accessor.DeleteAsync(turnContext, cancellationToken);
+    await _conversationState.SaveChangesAsync(
+        turnContext, 
+        force: false, 
+        cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    storage.Delete("UserProfile");
+    // Automatically persisted
+    ```
+  </TabItem>
+</Tabs>
+
+## Complex State Objects
+
+### Storing Custom Objects
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    public class UserProfile
+    {
+        public string Name { get; set; }
+        public int Age { get; set; }
+        public List<string> Preferences { get; set; }
+    }
+
+    private readonly IStatePropertyAccessor<UserProfile> _profileAccessor;
+
+    public MyBot(UserState userState)
+    {
+        _profileAccessor = userState.CreateProperty<UserProfile>("UserProfile");
+    }
+
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        var profile = await _profileAccessor.GetAsync(
+            turnContext,
+            () => new UserProfile 
+            { 
+                Preferences = new List<string>() 
+            },
+            cancellationToken);
+
+        profile.Name = "John";
+        profile.Age = 30;
+        profile.Preferences.Add("sports");
+
+        await _userState.SaveChangesAsync(turnContext, false, cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    public class UserProfile
+    {
+        public string Name { get; set; }
+        public int Age { get; set; }
+        public List<string> Preferences { get; set; }
+    }
+
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IStorage<string, object> storage)
+    {
+        var profile = storage.Get("UserProfile",
+            defaultValue: new UserProfile 
+            { 
+                Preferences = new List<string>() 
+            });
+
+        profile.Name = "John";
+        profile.Age = 30;
+        profile.Preferences.Add("sports");
+
+        storage.Set("UserProfile", profile);
+        // Automatically persisted
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## User vs Conversation State
+
+BotBuilder separates `UserState` and `ConversationState`. Teams AI v2 uses a single storage interface with scoping built into the key:
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    public class MyBot : ActivityHandler
+    {
+        private readonly IStatePropertyAccessor<UserData> _userAccessor;
+        private readonly IStatePropertyAccessor<ConversationData> _conversationAccessor;
+        private readonly UserState _userState;
+        private readonly ConversationState _conversationState;
+
+        public MyBot(UserState userState, ConversationState conversationState)
+        {
+            _userState = userState;
+            _conversationState = conversationState;
+            _userAccessor = userState.CreateProperty<UserData>("UserData");
+            _conversationAccessor = conversationState.CreateProperty<ConversationData>("ConversationData");
+        }
+
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            var userData = await _userAccessor.GetAsync(
+                turnContext, 
+                () => new UserData(), 
+                cancellationToken);
+            
+            var conversationData = await _conversationAccessor.GetAsync(
+                turnContext, 
+                () => new ConversationData(), 
+                cancellationToken);
+
+            userData.MessageCount++;
+            conversationData.Topic = "Migration";
+
+            await _userState.SaveChangesAsync(turnContext, false, cancellationToken);
+            await _conversationState.SaveChangesAsync(turnContext, false, cancellationToken);
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IStorage<string, object> storage)
+    {
+        // User-scoped data (key includes user ID)
+        var userKey = $"user_{activity.From.Id}";
+        var userData = storage.Get<UserData>(userKey, new UserData());
+        userData.MessageCount++;
+        storage.Set(userKey, userData);
+
+        // Conversation-scoped data (key includes conversation ID)
+        var convKey = $"conv_{activity.Conversation.Id}";
+        var conversationData = storage.Get<ConversationData>(convKey, new ConversationData());
+        conversationData.Topic = "Migration";
+        storage.Set(convKey, conversationData);
+
+        // Both automatically persisted
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Storage Providers
+
+### Memory Storage (Development)
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    // Startup.cs
+    services.AddSingleton<IStorage, MemoryStorage>();
+    services.AddSingleton<UserState>();
+    services.AddSingleton<ConversationState>();
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    // Program.cs
+    builder.AddTeams(); // Memory storage by default for development
+    ```
+  </TabItem>
+</Tabs>
+
+### Azure Blob Storage (Production)
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    // Startup.cs
+    var storage = new BlobsStorage(
+        configuration["BlobConnectionString"],
+        configuration["BlobContainerName"]);
+    
+    services.AddSingleton<IStorage>(storage);
+    services.AddSingleton<UserState>();
+    services.AddSingleton<ConversationState>();
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    // Program.cs
+    builder.AddTeams(options =>
+    {
+        options.Storage = new AzureBlobStorage(
+            configuration["BlobConnectionString"],
+            configuration["BlobContainerName"]);
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+### Cosmos DB Storage
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var storage = new CosmosDbPartitionedStorage(
+        new CosmosDbPartitionedStorageOptions
+        {
+            CosmosDbEndpoint = configuration["CosmosDbEndpoint"],
+            AuthKey = configuration["CosmosDbAuthKey"],
+            DatabaseId = configuration["CosmosDbDatabaseId"],
+            ContainerId = configuration["CosmosDbContainerId"]
+        });
+
+    services.AddSingleton<IStorage>(storage);
+    services.AddSingleton<UserState>();
+    services.AddSingleton<ConversationState>();
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    builder.AddTeams(options =>
+    {
+        options.Storage = new CosmosDbStorage(
+            endpoint: configuration["CosmosDbEndpoint"],
+            authKey: configuration["CosmosDbAuthKey"],
+            databaseId: configuration["CosmosDbDatabaseId"],
+            containerId: configuration["CosmosDbContainerId"]);
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+## Complete Working Example
+
+Here's a full example showing various state management patterns:
+
+```csharp showLineNumbers title="MainController.cs"
+using Microsoft.Teams.Api.Activities;
+using Microsoft.Teams.Apps.Annotations;
+using Microsoft.Teams.Apps;
+
+[TeamsController("main")]
+public class MainController
+{
+    [Message("/profile")]
+    public async Task OnProfileCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IStorage<string, object> storage)
+    {
+        var userId = activity.From.Id;
+        var profileKey = $"user_profile_{userId}";
+        
+        var profile = storage.Get<UserProfile>(profileKey);
+        
+        if (profile == null)
+        {
+            await client.Send("No profile found. Use /setprofile <name> to create one.");
+            return;
+        }
+        
+        await client.Send($"Name: {profile.Name}, Age: {profile.Age}");
+    }
+
+    [Message(@"/setprofile (?<name>\w+) (?<age>\d+)")]
+    public async Task OnSetProfileCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IStorage<string, object> storage)
+    {
+        // Extract name and age from message using regex groups
+        var match = System.Text.RegularExpressions.Regex.Match(
+            activity.Text, 
+            @"/setprofile (?<name>\w+) (?<age>\d+)");
+        
+        var name = match.Groups["name"].Value;
+        var age = int.Parse(match.Groups["age"].Value);
+        
+        var userId = activity.From.Id;
+        var profileKey = $"user_profile_{userId}";
+        
+        var profile = new UserProfile
+        {
+            Name = name,
+            Age = age,
+            CreatedAt = DateTime.UtcNow
+        };
+        
+        storage.Set(profileKey, profile);
+        
+        await client.Send($"Profile created for {name}, age {age}");
+    }
+
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IStorage<string, object> storage)
+    {
+        // Track message count per conversation
+        var convId = activity.Conversation.Id;
+        var countKey = $"conv_messagecount_{convId}";
+        
+        var count = storage.Get<int>(countKey);
+        count++;
+        storage.Set(countKey, count);
+        
+        // Track user's last message time
+        var userId = activity.From.Id;
+        var lastMessageKey = $"user_lastmessage_{userId}";
+        storage.Set(lastMessageKey, DateTime.UtcNow);
+        
+        await client.Send($"Message #{count} in this conversation");
+    }
+}
+
+public class UserProfile
+{
+    public string Name { get; set; }
+    public int Age { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+```
+
+## State Lifetime and Scoping
+
+Teams AI v2 automatically scopes state based on the context:
+
+```csharp
+[Message]
+public async Task OnMessage(
+    [Context] MessageActivity activity,
+    [Context] IStorage<string, object> storage)
+{
+    // Application-wide state (shared across all conversations)
+    var appStats = storage.Get<AppStatistics>("app_stats", new AppStatistics());
+    appStats.TotalMessages++;
+    storage.Set("app_stats", appStats);
+    
+    // Conversation-scoped state
+    var convKey = $"conv_{activity.Conversation.Id}";
+    var convData = storage.Get<ConversationData>(convKey, new ConversationData());
+    convData.MessageCount++;
+    storage.Set(convKey, convData);
+    
+    // User-scoped state
+    var userKey = $"user_{activity.From.Id}";
+    var userData = storage.Get<UserData>(userKey, new UserData());
+    userData.LastActivity = DateTime.UtcNow;
+    storage.Set(userKey, userData);
+    
+    // User-conversation-scoped state
+    var userConvKey = $"user_{activity.From.Id}_conv_{activity.Conversation.Id}";
+    var userConvData = storage.Get<UserConversationData>(userConvKey, new UserConversationData());
+    userConvData.Preferences.Add("dark-mode");
+    storage.Set(userConvKey, userConvData);
+}
+```
+
+## Key Benefits
+
+1. **Simpler API**: Just `Get()`, `Set()`, `Delete()`, and `Has()`
+2. **No Manual Saves**: Automatic persistence
+3. **Type Safety**: Generic methods with type parameters
+4. **Flexible Scoping**: Use key conventions for different scopes
+5. **Easy Testing**: Simple interface to mock
+6. **Less Boilerplate**: No state property accessors or state managers
+
+## Next Steps
+
+- **[Middleware](./middleware)** - Add custom processing pipelines
+- **[Testing](./testing)** - Write unit tests for your bot
+
+## Additional Resources
+
+- [State Management Documentation](../../essentials/app-basics#state-management)
+- [Azure Blob Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/)
+- [Azure Cosmos DB](https://learn.microsoft.com/en-us/azure/cosmos-db/)

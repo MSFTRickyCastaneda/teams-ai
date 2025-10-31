@@ -1,0 +1,591 @@
+---
+sidebar_position: 1
+summary: Migrate from BotBuilder's MessageFactory and SendActivityAsync to Teams AI's simplified Send method with enhanced Adaptive Card support.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Sending Activities
+
+One of the most common operations in a bot is sending messages back to users. BotBuilder uses `MessageFactory` and `SendActivityAsync`, while Teams AI Library v2 simplifies this with a unified `Send` method that handles various message types more elegantly.
+
+## Sending Simple Text Messages
+
+### Basic Text Message
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    protected override async Task OnMessageActivityAsync(
+-        ITurnContext<IMessageActivity> turnContext,
+-        CancellationToken cancellationToken)
+-    {
+-        await turnContext.SendActivityAsync(
+-            MessageFactory.Text("Hello, World!"),
+-            cancellationToken);
+-    }
+    // highlight-error-end
+    // highlight-success-start
++    [Message]
++    public async Task OnMessage(
++        [Context] MessageActivity activity,
++        [Context] IContext.Client client)
++    {
++        await client.Send("Hello, World!");
++    }
++    // highlight-success-end
+    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+    using Microsoft.Bot.Schema;
+
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        // highlight-next-line
+        await turnContext.SendActivityAsync(
+            MessageFactory.Text("Hello, World!"),
+            cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2">
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Api.Activities;
+    using Microsoft.Teams.Apps.Annotations;
+
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        // highlight-next-line
+        await client.Send("Hello, World!");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Text with Multiple Lines
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    await turnContext.SendActivityAsync(
+        MessageFactory.Text("Line 1\n\nLine 2\n\nLine 3"),
+        cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    await client.Send("Line 1\n\nLine 2\n\nLine 3");
+    ```
+  </TabItem>
+</Tabs>
+
+## Sending Typing Indicator
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    await turnContext.SendActivitiesAsync(
+-        new Activity[] { new Activity { Type = ActivityTypes.Typing } },
+-        cancellationToken);
+    // highlight-error-end
+    // highlight-success-start
++    await client.Typing();
+    // highlight-success-end
+    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    await turnContext.SendActivitiesAsync(
+        new Activity[] { 
+            new Activity { Type = ActivityTypes.Typing } 
+        },
+        cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    await client.Typing();
+    ```
+  </TabItem>
+</Tabs>
+
+## Sending Adaptive Cards
+
+One of the biggest improvements in Teams AI Library v2 is the simplified Adaptive Card API.
+
+### Basic Adaptive Card
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-line
+-    using Microsoft.Bot.Schema;
+    // highlight-success-start
++    using Microsoft.Teams.Cards;
++    using Microsoft.Teams.Cards.Elements;
+    // highlight-success-end
+
+    // highlight-error-start
+-    var cardJson = @"{
+-        ""type"": ""AdaptiveCard"",
+-        ""version"": ""1.4"",
+-        ""body"": [
+-            {
+-                ""type"": ""TextBlock"",
+-                ""text"": ""Hello, World!"",
+-                ""size"": ""Large"",
+-                ""weight"": ""Bolder""
+-            }
+-        ]
+-    }";
+-
+-    var attachment = new Attachment
+-    {
+-        ContentType = "application/vnd.microsoft.card.adaptive",
+-        Content = JsonConvert.DeserializeObject(cardJson)
+-    };
+-
+-    var activity = MessageFactory.Attachment(attachment);
+-    await turnContext.SendActivityAsync(activity, cancellationToken);
+    // highlight-error-end
+    // highlight-success-start
++    var card = new AdaptiveCard(
++        new TextBlock("Hello, World!")
++        {
++            Size = TextSize.Large,
++            Weight = TextWeight.Bolder
++        }
++    );
++
++    await client.Send(card);
++    // highlight-success-end
+    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Schema;
+    using Newtonsoft.Json;
+
+    var cardJson = @"{
+        ""type"": ""AdaptiveCard"",
+        ""version"": ""1.4"",
+        ""body"": [
+            {
+                ""type"": ""TextBlock"",
+                ""text"": ""Hello, World!"",
+                ""size"": ""Large"",
+                ""weight"": ""Bolder""
+            }
+        ]
+    }";
+
+    var attachment = new Attachment
+    {
+        ContentType = "application/vnd.microsoft.card.adaptive",
+        Content = JsonConvert.DeserializeObject(cardJson)
+    };
+
+    // highlight-start
+    var activity = MessageFactory.Attachment(attachment);
+    await turnContext.SendActivityAsync(activity, cancellationToken);
+    // highlight-end
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Cards;
+    using Microsoft.Teams.Cards.Elements;
+
+    var card = new AdaptiveCard(
+        new TextBlock("Hello, World!")
+        {
+            Size = TextSize.Large,
+            Weight = TextWeight.Bolder
+        }
+    );
+
+    // highlight-next-line
+    await client.Send(card);
+    ```
+  </TabItem>
+</Tabs>
+
+### Adaptive Card with Actions
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var cardJson = @"{
+        ""type"": ""AdaptiveCard"",
+        ""version"": ""1.4"",
+        ""body"": [
+            {
+                ""type"": ""TextBlock"",
+                ""text"": ""What is your choice?""
+            }
+        ],
+        ""actions"": [
+            {
+                ""type"": ""Action.Submit"",
+                ""title"": ""Option A"",
+                ""data"": {
+                    ""choice"": ""A""
+                }
+            },
+            {
+                ""type"": ""Action.Submit"",
+                ""title"": ""Option B"",
+                ""data"": {
+                    ""choice"": ""B""
+                }
+            }
+        ]
+    }";
+
+    var attachment = new Attachment
+    {
+        ContentType = "application/vnd.microsoft.card.adaptive",
+        Content = JsonConvert.DeserializeObject(cardJson)
+    };
+
+    await turnContext.SendActivityAsync(
+        MessageFactory.Attachment(attachment),
+        cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Cards;
+    using Microsoft.Teams.Cards.Elements;
+    using Microsoft.Teams.Cards.Actions;
+
+    var card = new AdaptiveCard(
+        new TextBlock("What is your choice?")
+    )
+    .AddAction(new SubmitAction("Option A")
+    {
+        Data = new { choice = "A" }
+    })
+    .AddAction(new SubmitAction("Option B")
+    {
+        Data = new { choice = "B" }
+    });
+
+    await client.Send(card);
+    ```
+  </TabItem>
+</Tabs>
+
+### Complex Adaptive Card
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var card = new AdaptiveCard(
+        new TextBlock("Product Information")
+        {
+            Size = TextSize.Large,
+            Weight = TextWeight.Bolder
+        },
+        new ColumnSet(
+            new Column(
+                new Image("https://example.com/product.jpg")
+                {
+                    Size = ImageSize.Medium
+                }
+            ) { Width = "auto" },
+            new Column(
+                new TextBlock("Product Name") { Weight = TextWeight.Bolder },
+                new TextBlock("$99.99") { Color = TextColor.Accent },
+                new TextBlock("In stock")
+            ) { Width = "stretch" }
+        ),
+        new FactSet(
+            new Fact("Category", "Electronics"),
+            new Fact("Brand", "TechCorp"),
+            new Fact("SKU", "TC-12345")
+        )
+    )
+    .AddAction(new OpenUrlAction("View Details")
+    {
+        Url = new Uri("https://example.com/product")
+    })
+    .AddAction(new SubmitAction("Add to Cart")
+    {
+        Data = new { action = "addToCart", productId = "12345" }
+    });
+
+    await client.Send(card);
+    ```
+  </TabItem>
+</Tabs>
+
+## Sending Hero Cards
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    var heroCard = new HeroCard
+-    {
+-        Title = "Welcome!",
+-        Text = "This is a hero card",
+-        Images = new List<CardImage> 
+-        { 
+-            new CardImage("https://example.com/image.jpg") 
+-        },
+-        Buttons = new List<CardAction>
+-        {
+-            new CardAction(ActionTypes.OpenUrl, "Learn More", value: "https://example.com")
+-        }
+-    };
+-
+-    var attachment = heroCard.ToAttachment();
+-    await turnContext.SendActivityAsync(
+-        MessageFactory.Attachment(attachment),
+-        cancellationToken);
+    // highlight-error-end
+    // highlight-success-start
++    var heroCard = new HeroCard
++    {
++        Title = "Welcome!",
++        Text = "This is a hero card",
++        Images = new List<CardImage> 
++        { 
++            new CardImage("https://example.com/image.jpg") 
++        },
++        Buttons = new List<CardAction>
++        {
++            new CardAction(ActionTypes.OpenUrl, "Learn More", value: "https://example.com")
++        }
++    };
++
++    await client.Send(new MessageActivity().AddAttachment(heroCard.ToAttachment()));
++    // highlight-success-end
+    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var heroCard = new HeroCard
+    {
+        Title = "Welcome!",
+        Text = "This is a hero card",
+        Images = new List<CardImage> 
+        { 
+            new CardImage("https://example.com/image.jpg") 
+        },
+        Buttons = new List<CardAction>
+        {
+            new CardAction(ActionTypes.OpenUrl, "Learn More", value: "https://example.com")
+        }
+    };
+
+    // highlight-start
+    var attachment = heroCard.ToAttachment();
+    await turnContext.SendActivityAsync(
+        MessageFactory.Attachment(attachment),
+        cancellationToken);
+    // highlight-end
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var heroCard = new HeroCard
+    {
+        Title = "Welcome!",
+        Text = "This is a hero card",
+        Images = new List<CardImage> 
+        { 
+            new CardImage("https://example.com/image.jpg") 
+        },
+        Buttons = new List<CardAction>
+        {
+            new CardAction(ActionTypes.OpenUrl, "Learn More", value: "https://example.com")
+        }
+    };
+
+    // highlight-next-line
+    await client.Send(new MessageActivity().AddAttachment(heroCard.ToAttachment()));
+    ```
+  </TabItem>
+</Tabs>
+
+## Sending Multiple Attachments
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var attachments = new List<Attachment>
+    {
+        heroCard1.ToAttachment(),
+        heroCard2.ToAttachment(),
+        heroCard3.ToAttachment()
+    };
+
+    var activity = MessageFactory.Carousel(attachments);
+    await turnContext.SendActivityAsync(activity, cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var message = new MessageActivity()
+        .AddAttachment(heroCard1.ToAttachment())
+        .AddAttachment(heroCard2.ToAttachment())
+        .AddAttachment(heroCard3.ToAttachment());
+    
+    message.AttachmentLayout = AttachmentLayoutTypes.Carousel;
+    
+    await client.Send(message);
+    ```
+  </TabItem>
+</Tabs>
+
+## Sending Files
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var fileBytes = await File.ReadAllBytesAsync("document.pdf");
+    var base64 = Convert.ToBase64String(fileBytes);
+
+    var fileAttachment = new Attachment
+    {
+        Name = "document.pdf",
+        ContentType = "application/pdf",
+        ContentUrl = $"data:application/pdf;base64,{base64}"
+    };
+
+    await turnContext.SendActivityAsync(
+        MessageFactory.Attachment(fileAttachment),
+        cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var fileBytes = await File.ReadAllBytesAsync("document.pdf");
+    var base64 = Convert.ToBase64String(fileBytes);
+
+    var fileAttachment = new Attachment
+    {
+        Name = "document.pdf",
+        ContentType = "application/pdf",
+        ContentUrl = $"data:application/pdf;base64,{base64}"
+    };
+
+    await client.Send(new MessageActivity().AddAttachment(fileAttachment));
+    ```
+  </TabItem>
+</Tabs>
+
+## Sending Suggestions (Quick Replies)
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var reply = MessageFactory.Text("What would you like to do?");
+    reply.SuggestedActions = new SuggestedActions
+    {
+        Actions = new List<CardAction>
+        {
+            new CardAction { Title = "Option 1", Type = ActionTypes.ImBack, Value = "option1" },
+            new CardAction { Title = "Option 2", Type = ActionTypes.ImBack, Value = "option2" },
+            new CardAction { Title = "Option 3", Type = ActionTypes.ImBack, Value = "option3" }
+        }
+    };
+
+    await turnContext.SendActivityAsync(reply, cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var message = new MessageActivity
+    {
+        Text = "What would you like to do?",
+        SuggestedActions = new SuggestedActions
+        {
+            Actions = new List<CardAction>
+            {
+                new CardAction { Title = "Option 1", Type = ActionTypes.ImBack, Value = "option1" },
+                new CardAction { Title = "Option 2", Type = ActionTypes.ImBack, Value = "option2" },
+                new CardAction { Title = "Option 3", Type = ActionTypes.ImBack, Value = "option3" }
+            }
+        }
+    };
+
+    await client.Send(message);
+    ```
+  </TabItem>
+</Tabs>
+
+## Streaming Messages
+
+Teams AI Library v2 introduces streaming support for long-form responses:
+
+```csharp
+[Message]
+public void OnMessage(
+    [Context] MessageActivity activity,
+    [Context] IStreamer stream)
+{
+    stream.Emit("Processing your request");
+    stream.Emit(".");
+    stream.Emit(".");
+    stream.Emit(".");
+    stream.Emit(" Done!");
+    // Result: "Processing your request... Done!"
+}
+```
+
+:::note
+Streaming is currently only supported in 1:1 conversations, not group chats or channels.
+:::
+
+## Message with @Mentions
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var mention = new Mention
+    {
+        Mentioned = turnContext.Activity.From,
+        Text = $"<at>{turnContext.Activity.From.Name}</at>"
+    };
+
+    var replyActivity = MessageFactory.Text($"{mention.Text} Hello!");
+    replyActivity.Entities.Add(mention);
+
+    await turnContext.SendActivityAsync(replyActivity, cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    await client.Send(
+        new MessageActivity("Hello!")
+            .AddMention(activity.From)
+    );
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+Continue learning about context operations:
+
+- **[Proactive Messaging](./proactive-activities)** - Send messages without user trigger
+- **[API Access](./the-api-client)** - Using the Teams API client
+- **[User Authentication](../user-authentication)** - Implement OAuth flows
+
+## Additional Resources
+
+- [Sending Messages Documentation](../../../essentials/sending-messages)
+- [Adaptive Cards Guide](../../../in-depth-guides/adaptive-cards)

@@ -1,0 +1,448 @@
+---
+sidebar_position: 2
+summary: How to migrate BotBuilder ActivityHandler patterns to Teams AI Library v2 activity routing system with attribute-based and functional approaches.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Activity Handlers
+
+In BotBuilder, you create a bot by inheriting from `ActivityHandler` or `TeamsActivityHandler` and overriding methods like `OnMessageActivityAsync`, `OnMembersAddedAsync`, etc. Teams AI Library v2 takes a different approach with **attribute-based routing** (controller style) or **functional handlers** (minimal style), making your code cleaner and more testable.
+
+## Basic Message Handling
+
+The most common activity to handle is incoming messages from users.
+
+### BotBuilder Approach
+
+<Tabs>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+    using Microsoft.Bot.Schema;
+
+    public class EchoBot : ActivityHandler
+    {
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext, 
+            CancellationToken cancellationToken)
+        {
+            var replyText = $"Echo: {turnContext.Activity.Text}";
+            await turnContext.SendActivityAsync(
+                MessageFactory.Text(replyText), 
+                cancellationToken);
+        }
+
+        protected override async Task OnMembersAddedAsync(
+            IList<ChannelAccount> membersAdded, 
+            ITurnContext<IConversationUpdateActivity> turnContext, 
+            CancellationToken cancellationToken)
+        {
+            foreach (var member in membersAdded)
+            {
+                if (member.Id != turnContext.Activity.Recipient.Id)
+                {
+                    await turnContext.SendActivityAsync(
+                        MessageFactory.Text("Welcome!"), 
+                        cancellationToken);
+                }
+            }
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Teams AI Library v2 Approach
+
+<Tabs>
+  <TabItem value="Controller" label="Controller Style" default>
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Api.Activities;
+    using Microsoft.Teams.Apps.Annotations;
+
+    [TeamsController("main")]
+    public class MainController
+    {
+        [Message]
+        public async Task OnMessage(
+            [Context] MessageActivity activity, 
+            [Context] IContext.Client client)
+        {
+            var replyText = $"Echo: {activity.Text}";
+            await client.Send(replyText);
+        }
+
+        [Install]
+        public async Task OnInstall(
+            [Context] InstallUpdateActivity activity, 
+            [Context] IContext.Client client)
+        {
+            await client.Send("Welcome!");
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Minimal" label="Minimal Style">
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Apps;
+
+    var builder = WebApplication.CreateBuilder(args);
+    builder.AddTeams();
+
+    var app = builder.Build();
+    var teams = app.UseTeams();
+
+    teams.OnMessage(async context =>
+    {
+        var replyText = $"Echo: {context.Activity.Text}";
+        await context.Send(replyText);
+    });
+
+    teams.OnInstall(async context =>
+    {
+        await context.Send("Welcome!");
+    });
+
+    app.Run();
+    ```
+  </TabItem>
+</Tabs>
+
+## Side-by-Side Comparison
+
+Let's look at a complete migration example:
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    using Microsoft.Bot.Builder;
+-    using Microsoft.Bot.Schema;
+-    using Microsoft.Bot.Builder.Teams;
+    // highlight-error-end
+    // highlight-success-start
++    using Microsoft.Teams.Api.Activities;
++    using Microsoft.Teams.Apps.Annotations;
++    using Microsoft.Teams.Apps;
+    // highlight-success-end
+
+    // highlight-error-start
+-    public class MyTeamsBot : TeamsActivityHandler
+-    {
+-        protected override async Task OnMessageActivityAsync(
+-            ITurnContext<IMessageActivity> turnContext,
+-            CancellationToken cancellationToken)
+-        {
+-            await turnContext.SendActivityAsync(
+-                MessageFactory.Text($"You said: {turnContext.Activity.Text}"),
+-                cancellationToken);
+-        }
+    // highlight-error-end
+    // highlight-success-start
++    [TeamsController("main")]
++    public class MainController
++    {
++        [Message]
++        public async Task OnMessage(
++            [Context] MessageActivity activity,
++            [Context] IContext.Client client)
++        {
++            await client.Send($"You said: {activity.Text}");
++        }
+    // highlight-success-end
+
+    // highlight-error-start
+-        protected override async Task OnTeamsChannelCreatedAsync(
+-            ChannelInfo channelInfo,
+-            TeamInfo teamInfo,
+-            ITurnContext<IConversationUpdateActivity> turnContext,
+-            CancellationToken cancellationToken)
+-        {
+-            await turnContext.SendActivityAsync(
+-                MessageFactory.Text($"Channel {channelInfo.Name} was created"),
+-                cancellationToken);
+-        }
+    // highlight-error-end
+    // highlight-success-start
++        [ChannelCreated]
++        public async Task OnChannelCreated(
++            [Context] ChannelCreatedActivity activity,
++            [Context] IContext.Client client)
++        {
++            await client.Send($"Channel {activity.Channel.Name} was created");
++        }
++    }
+    // highlight-success-end
+-    }
+    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+    using Microsoft.Bot.Schema;
+    using Microsoft.Bot.Builder.Teams;
+
+    public class MyTeamsBot : TeamsActivityHandler
+    {
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            // highlight-next-line
+            await turnContext.SendActivityAsync(
+                MessageFactory.Text($"You said: {turnContext.Activity.Text}"),
+                cancellationToken);
+        }
+
+        protected override async Task OnTeamsChannelCreatedAsync(
+            ChannelInfo channelInfo,
+            TeamInfo teamInfo,
+            ITurnContext<IConversationUpdateActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            // highlight-next-line
+            await turnContext.SendActivityAsync(
+                MessageFactory.Text($"Channel {channelInfo.Name} was created"),
+                cancellationToken);
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2">
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Api.Activities;
+    using Microsoft.Teams.Apps.Annotations;
+    using Microsoft.Teams.Apps;
+
+    [TeamsController("main")]
+    public class MainController
+    {
+        [Message]
+        public async Task OnMessage(
+            [Context] MessageActivity activity,
+            [Context] IContext.Client client)
+        {
+            // highlight-next-line
+            await client.Send($"You said: {activity.Text}");
+        }
+
+        [ChannelCreated]
+        public async Task OnChannelCreated(
+            [Context] ChannelCreatedActivity activity,
+            [Context] IContext.Client client)
+        {
+            // highlight-next-line
+            await client.Send($"Channel {activity.Channel.Name} was created");
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Common Activity Handler Mappings
+
+Here's a reference table for mapping BotBuilder methods to Teams AI Library v2 attributes:
+
+| BotBuilder Method | Teams AI v2 Attribute | Activity Type |
+|------------------|----------------------|---------------|
+| `OnMessageActivityAsync` | `[Message]` | Message from user |
+| `OnMembersAddedAsync` | `[Install]` | Bot/app installed |
+| `OnMembersRemovedAsync` | `[Uninstall]` | Bot/app uninstalled |
+| `OnTeamsChannelCreatedAsync` | `[ChannelCreated]` | Channel created |
+| `OnTeamsChannelDeletedAsync` | `[ChannelDeleted]` | Channel deleted |
+| `OnTeamsChannelRenamedAsync` | `[ChannelRenamed]` | Channel renamed |
+| `OnTeamsTeamRenamedAsync` | `[TeamRenamed]` | Team renamed |
+| `OnTeamsMembersAddedAsync` | `[MembersAdded]` | Members added to team |
+| `OnTeamsMembersRemovedAsync` | `[MembersRemoved]` | Members removed from team |
+| `OnInvokeActivityAsync` | `[Invoke]` or specific invoke attributes | Invoke activities |
+
+## Handling Invoke Activities
+
+BotBuilder uses `OnInvokeActivityAsync` for all invoke activities, requiring you to check the activity name. Teams AI Library v2 provides specific attributes for common invoke patterns:
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    protected override async Task<InvokeResponse> OnInvokeActivityAsync(
+        ITurnContext<IInvokeActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        if (turnContext.Activity.Name == "composeExtension/query")
+        {
+            // Handle message extension query
+            return CreateInvokeResponse(/* ... */);
+        }
+        else if (turnContext.Activity.Name == "adaptiveCard/action")
+        {
+            // Handle adaptive card action
+            return CreateInvokeResponse(/* ... */);
+        }
+        
+        return CreateInvokeResponse();
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    [MessageExtension.Query]
+    public async Task<MessagingExtensionResult> OnQuery(
+        [Context] MessageExtensionQueryActivity activity,
+        [Context] IContext.Client client)
+    {
+        // Handle message extension query
+        return new MessagingExtensionResult(/* ... */);
+    }
+
+    [AdaptiveCard.Action]
+    public async Task OnAdaptiveCardAction(
+        [Context] AdaptiveCardInvokeActivity activity,
+        [Context] IContext.Client client)
+    {
+        // Handle adaptive card action
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Dependency Injection
+
+One of the biggest advantages of Teams AI Library v2 is native dependency injection support:
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    public class MyBot : ActivityHandler
+    {
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<MyBot> _logger;
+
+        public MyBot(IConfiguration configuration, ILogger<MyBot> logger)
+        {
+            _configuration = configuration;
+            _logger = logger;
+        }
+
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            _logger.LogInformation("Received message");
+            // ...
+        }
+    }
+
+    // Startup.cs
+    services.AddTransient<IBot, MyBot>();
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    [TeamsController("main")]
+    public class MainController
+    {
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<MainController> _logger;
+
+        // Constructor injection works naturally
+        public MainController(
+            IConfiguration configuration, 
+            ILogger<MainController> logger)
+        {
+            _configuration = configuration;
+            _logger = logger;
+        }
+
+        [Message]
+        public async Task OnMessage(
+            [Context] MessageActivity activity,
+            [Context] IContext.Client client)
+        {
+            _logger.LogInformation("Received message");
+            // ...
+        }
+    }
+
+    // Program.cs
+    builder.Services.AddTransient<MainController>();
+    ```
+  </TabItem>
+</Tabs>
+
+## Pattern Matching and Routing
+
+Teams AI Library v2 also supports pattern matching for messages:
+
+```csharp
+[TeamsController("main")]
+public class MainController
+{
+    // Match specific text
+    [Message("/help")]
+    public async Task OnHelpCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        await client.Send("Help information...");
+    }
+
+    // Regular expression matching
+    [Message(@"/remind (?<when>\w+)")]
+    public async Task OnRemindCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        var when = activity.Text; // Extract "when" from regex
+        await client.Send($"I'll remind you {when}");
+    }
+
+    // Catch-all for other messages
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        await client.Send($"You said: {activity.Text}");
+    }
+}
+```
+
+## Testing
+
+Teams AI Library v2 makes testing much easier with dependency injection:
+
+```csharp
+public class MainControllerTests
+{
+    [Fact]
+    public async Task OnMessage_EchoesUserInput()
+    {
+        // Arrange
+        var mockClient = new Mock<IContext.Client>();
+        var controller = new MainController();
+        var activity = new MessageActivity { Text = "Hello" };
+
+        // Act
+        await controller.OnMessage(activity, mockClient.Object);
+
+        // Assert
+        mockClient.Verify(
+            c => c.Send("You said: Hello"), 
+            Times.Once);
+    }
+}
+```
+
+## Next Steps
+
+Now that you understand how to migrate activity handlers, continue with:
+
+- **[Turn Context](./turn-context/)** - Learn about the new context model
+- **[Sending Activities](./turn-context/sending-activities)** - Migrate message sending patterns
+- **[User Authentication](./user-authentication)** - Simplify OAuth flows
+
+## Additional Resources
+
+- [Activity Handlers Documentation](../../essentials/on-activity)
+- [Message Handling Guide](../../essentials/sending-messages)

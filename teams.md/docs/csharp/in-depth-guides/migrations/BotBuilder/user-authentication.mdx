@@ -1,0 +1,785 @@
+---
+sidebar_position: 4
+summary: Migrate from BotBuilder's complex OAuthPrompt dialogs to Teams AI's simple SignIn/SignOut methods with built-in SSO support.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# User Authentication
+
+One of the most dramatic simplifications in Teams AI Library v2 is user authentication. BotBuilder requires complex dialog management with `OAuthPrompt`, `WaterfallDialog`, and state management. Teams AI v2 reduces this to simple `SignIn()` and `SignOut()` method calls.
+
+## Overview
+
+**BotBuilder approach:**
+- Create `OAuthPrompt` dialog
+- Manage dialog state with `ConversationState` and `UserState`
+- Handle waterfall steps
+- Implement interrupt logic for sign-out
+- Manually manage token lifecycle
+
+**Teams AI v2 approach:**
+- Configure OAuth connection name
+- Call `SignIn()` method
+- Subscribe to `OnSignIn` event
+- Use `IsSignedIn` property
+- Call `SignOut()` method
+
+## Complete Migration Example
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    using Microsoft.Bot.Builder;
+-    using Microsoft.Bot.Builder.Dialogs;
+-    using Microsoft.Bot.Schema;
+
+-    public class AuthBot : ActivityHandler
+-    {
+-        private readonly ConversationState _conversationState;
+-        private readonly UserState _userState;
+-        private readonly Dialog _dialog;
+
+-        public AuthBot(
+-            ConversationState conversationState,
+-            UserState userState,
+-            SignInDialog dialog)
+-        {
+-            _conversationState = conversationState;
+-            _userState = userState;
+-            _dialog = dialog;
+-        }
+
+-        protected override async Task OnMessageActivityAsync(
+-            ITurnContext<IMessageActivity> turnContext,
+-            CancellationToken cancellationToken)
+-        {
+-            await _dialog.RunAsync(
+-                turnContext,
+-                _conversationState.CreateProperty<DialogState>("DialogState"),
+-                cancellationToken);
+-        }
+
+-        public override async Task OnTurnAsync(
+-            ITurnContext turnContext,
+-            CancellationToken cancellationToken)
+-        {
+-            await base.OnTurnAsync(turnContext, cancellationToken);
+-            await _conversationState.SaveChangesAsync(turnContext, false, cancellationToken);
+-            await _userState.SaveChangesAsync(turnContext, false, cancellationToken);
+-        }
+-    }
+
+-    public class SignInDialog : ComponentDialog
+-    {
+-        public SignInDialog(string connectionName) : base(nameof(SignInDialog))
+-        {
+-            AddDialog(new OAuthPrompt(
+-                nameof(OAuthPrompt),
+-                new OAuthPromptSettings
+-                {
+-                    ConnectionName = connectionName,
+-                    Text = "Please sign in",
+-                    Title = "Sign In",
+-                    Timeout = 300000
+-                }));
+
+-            AddDialog(new WaterfallDialog(nameof(WaterfallDialog), new WaterfallStep[]
+-            {
+-                PromptStepAsync,
+-                LoginStepAsync
+-            }));
+
+-            InitialDialogId = nameof(WaterfallDialog);
+-        }
+
+-        private async Task<DialogTurnResult> PromptStepAsync(
+-            WaterfallStepContext stepContext,
+-            CancellationToken cancellationToken)
+-        {
+-            return await stepContext.BeginDialogAsync(
+-                nameof(OAuthPrompt),
+-                null,
+-                cancellationToken);
+-        }
+
+-        private async Task<DialogTurnResult> LoginStepAsync(
+-            WaterfallStepContext stepContext,
+-            CancellationToken cancellationToken)
+-        {
+-            var tokenResponse = (TokenResponse)stepContext.Result;
+-            if (tokenResponse?.Token != null)
+-            {
+-                await stepContext.Context.SendActivityAsync(
+-                    "You are now signed in!",
+-                    cancellationToken: cancellationToken);
+-            }
+-            return await stepContext.EndDialogAsync(null, cancellationToken);
+-        }
+
+-        protected override async Task<DialogTurnResult> OnContinueDialogAsync(
+-            DialogContext innerDc,
+-            CancellationToken cancellationToken)
+-        {
+-            var result = await InterruptAsync(innerDc, cancellationToken);
+-            if (result != null) return result;
+-            return await base.OnContinueDialogAsync(innerDc, cancellationToken);
+-        }
+
+-        private async Task<DialogTurnResult> InterruptAsync(
+-            DialogContext innerDc,
+-            CancellationToken cancellationToken)
+-        {
+-            if (innerDc.Context.Activity.Type == ActivityTypes.Message)
+-            {
+-                var text = innerDc.Context.Activity.Text?.ToLowerInvariant();
+-                if (text == "/signout")
+-                {
+-                    var botAdapter = (BotFrameworkAdapter)innerDc.Context.Adapter;
+-                    await botAdapter.SignOutUserAsync(
+-                        innerDc.Context,
+-                        _connectionName,
+-                        innerDc.Context.Activity.From.Id,
+-                        cancellationToken);
+-                    await innerDc.Context.SendActivityAsync(
+-                        "You have been signed out.",
+-                        cancellationToken: cancellationToken);
+-                    return await innerDc.CancelAllDialogsAsync(cancellationToken);
+-                }
+-            }
+-            return null;
+-        }
+-    }
+
+-    // Startup.cs
+-    services.AddSingleton<IStorage, MemoryStorage>();
+-    services.AddSingleton<ConversationState>();
+-    services.AddSingleton<UserState>();
+-    services.AddSingleton<SignInDialog>(sp =>
+-        new SignInDialog(Configuration["ConnectionName"]));
+-    services.AddTransient<IBot, AuthBot>();
+    // highlight-error-end
+    // highlight-success-start
++    // Program.cs
++    var builder = WebApplication.CreateBuilder(args);
+
++    builder.AddTeams(options =>
++    {
++        options.OAuth.ConnectionName = builder.Configuration["ConnectionName"];
++    });
+
++    var app = builder.Build();
++    var teams = app.UseTeams();
+
++    teams.OnMessage("/signin", async context =>
++    {
++        if (context.IsSignedIn)
++        {
++            await context.Send("You are already signed in!");
++            return;
++        }
++        await context.SignIn();
++    });
+
++    teams.OnMessage("/signout", async context =>
++    {
++        if (!context.IsSignedIn)
++        {
++            await context.Send("You are not signed in!");
++            return;
++        }
++        await context.SignOut();
++        await context.Send("You have been signed out.");
++    });
+
++    teams.OnSignIn(async context =>
++    {
++        await context.Send("You are now signed in!");
++    });
+
++    teams.OnMessage("/profile", async context =>
++    {
++        if (!context.IsSignedIn)
++        {
++            await context.Send("Please type /signin first.");
++            return;
++        }
+
++        var user = await context.GetUserGraphClient().Me.GetAsync();
++        await context.Send($"Hello, {user.DisplayName}!");
++    });
+
++    app.Run();
++    // highlight-success-end
+    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+    using Microsoft.Bot.Builder.Dialogs;
+    using Microsoft.Bot.Schema;
+
+    public class AuthBot : ActivityHandler
+    {
+        private readonly ConversationState _conversationState;
+        private readonly UserState _userState;
+        private readonly Dialog _dialog;
+
+        public AuthBot(
+            ConversationState conversationState,
+            UserState userState,
+            SignInDialog dialog)
+        {
+            _conversationState = conversationState;
+            _userState = userState;
+            _dialog = dialog;
+        }
+
+        // highlight-start
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            await _dialog.RunAsync(
+                turnContext,
+                _conversationState.CreateProperty<DialogState>("DialogState"),
+                cancellationToken);
+        }
+
+        public override async Task OnTurnAsync(
+            ITurnContext turnContext,
+            CancellationToken cancellationToken)
+        {
+            await base.OnTurnAsync(turnContext, cancellationToken);
+            await _conversationState.SaveChangesAsync(turnContext, false, cancellationToken);
+            await _userState.SaveChangesAsync(turnContext, false, cancellationToken);
+        }
+        // highlight-end
+    }
+
+    public class SignInDialog : ComponentDialog
+    {
+        private readonly string _connectionName;
+
+        public SignInDialog(string connectionName) : base(nameof(SignInDialog))
+        {
+            _connectionName = connectionName;
+
+            // highlight-start
+            AddDialog(new OAuthPrompt(
+                nameof(OAuthPrompt),
+                new OAuthPromptSettings
+                {
+                    ConnectionName = connectionName,
+                    Text = "Please sign in",
+                    Title = "Sign In",
+                    Timeout = 300000
+                }));
+
+            AddDialog(new WaterfallDialog(nameof(WaterfallDialog), new WaterfallStep[]
+            {
+                PromptStepAsync,
+                LoginStepAsync
+            }));
+
+            InitialDialogId = nameof(WaterfallDialog);
+            // highlight-end
+        }
+
+        private async Task<DialogTurnResult> PromptStepAsync(
+            WaterfallStepContext stepContext,
+            CancellationToken cancellationToken)
+        {
+            return await stepContext.BeginDialogAsync(
+                nameof(OAuthPrompt),
+                null,
+                cancellationToken);
+        }
+
+        private async Task<DialogTurnResult> LoginStepAsync(
+            WaterfallStepContext stepContext,
+            CancellationToken cancellationToken)
+        {
+            var tokenResponse = (TokenResponse)stepContext.Result;
+            if (tokenResponse?.Token != null)
+            {
+                await stepContext.Context.SendActivityAsync(
+                    "You are now signed in!",
+                    cancellationToken: cancellationToken);
+            }
+            return await stepContext.EndDialogAsync(null, cancellationToken);
+        }
+
+        // highlight-start
+        protected override async Task<DialogTurnResult> OnContinueDialogAsync(
+            DialogContext innerDc,
+            CancellationToken cancellationToken)
+        {
+            var result = await InterruptAsync(innerDc, cancellationToken);
+            if (result != null) return result;
+            return await base.OnContinueDialogAsync(innerDc, cancellationToken);
+        }
+
+        private async Task<DialogTurnResult> InterruptAsync(
+            DialogContext innerDc,
+            CancellationToken cancellationToken)
+        {
+            if (innerDc.Context.Activity.Type == ActivityTypes.Message)
+            {
+                var text = innerDc.Context.Activity.Text?.ToLowerInvariant();
+                if (text == "/signout")
+                {
+                    var botAdapter = (BotFrameworkAdapter)innerDc.Context.Adapter;
+                    await botAdapter.SignOutUserAsync(
+                        innerDc.Context,
+                        _connectionName,
+                        innerDc.Context.Activity.From.Id,
+                        cancellationToken);
+                    await innerDc.Context.SendActivityAsync(
+                        "You have been signed out.",
+                        cancellationToken: cancellationToken);
+                    return await innerDc.CancelAllDialogsAsync(cancellationToken);
+                }
+            }
+            return null;
+        }
+        // highlight-end
+    }
+
+    // Startup.cs
+    services.AddSingleton<IStorage, MemoryStorage>();
+    services.AddSingleton<ConversationState>();
+    services.AddSingleton<UserState>();
+    services.AddSingleton<SignInDialog>(sp =>
+        new SignInDialog(Configuration["ConnectionName"]));
+    services.AddTransient<IBot, AuthBot>();
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2">
+    ```csharp showLineNumbers
+    // Program.cs
+    var builder = WebApplication.CreateBuilder(args);
+
+    // highlight-start
+    builder.AddTeams(options =>
+    {
+        options.OAuth.ConnectionName = builder.Configuration["ConnectionName"];
+    });
+    // highlight-end
+
+    var app = builder.Build();
+    var teams = app.UseTeams();
+
+    // highlight-start
+    teams.OnMessage("/signin", async context =>
+    {
+        if (context.IsSignedIn)
+        {
+            await context.Send("You are already signed in!");
+            return;
+        }
+        await context.SignIn();
+    });
+
+    teams.OnMessage("/signout", async context =>
+    {
+        if (!context.IsSignedIn)
+        {
+            await context.Send("You are not signed in!");
+            return;
+        }
+        await context.SignOut();
+        await context.Send("You have been signed out.");
+    });
+
+    teams.OnSignIn(async context =>
+    {
+        await context.Send("You are now signed in!");
+    });
+    // highlight-end
+
+    teams.OnMessage("/profile", async context =>
+    {
+        if (!context.IsSignedIn)
+        {
+            await context.Send("Please type /signin first.");
+            return;
+        }
+
+        var user = await context.GetUserGraphClient().Me.GetAsync();
+        await context.Send($"Hello, {user.DisplayName}!");
+    });
+
+    app.Run();
+    ```
+  </TabItem>
+</Tabs>
+
+## Controller-Based Approach
+
+If you prefer the controller style:
+
+```csharp showLineNumbers title="Program.cs"
+var builder = WebApplication.CreateBuilder(args);
+
+builder.AddTeams(options =>
+{
+    options.OAuth.ConnectionName = builder.Configuration["ConnectionName"];
+});
+
+builder.Services.AddTransient<MainController>();
+
+var app = builder.Build();
+app.UseTeams();
+app.Run();
+```
+
+```csharp showLineNumbers title="MainController.cs"
+using Microsoft.Teams.Api.Activities;
+using Microsoft.Teams.Apps.Annotations;
+using Microsoft.Graph;
+
+[TeamsController("main")]
+public class MainController
+{
+    private readonly ILogger<MainController> _logger;
+
+    public MainController(ILogger<MainController> logger)
+    {
+        _logger = logger;
+    }
+
+    [Message("/signin")]
+    public async Task OnSignInCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Auth auth)
+    {
+        if (auth.IsSignedIn)
+        {
+            await client.Send("You are already signed in!");
+            return;
+        }
+
+        await auth.SignIn();
+    }
+
+    [Message("/signout")]
+    public async Task OnSignOutCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Auth auth)
+    {
+        if (!auth.IsSignedIn)
+        {
+            await client.Send("You are not signed in!");
+            return;
+        }
+
+        await auth.SignOut();
+        await client.Send("You have been signed out.");
+    }
+
+    [SignIn.VerifyState]
+    public async Task OnSignIn(
+        [Context] SignIn.VerifyStateActivity activity,
+        [Context] IContext.Client client)
+    {
+        _logger.LogInformation("User {UserId} signed in", activity.From.Id);
+        await client.Send("You are now signed in!");
+    }
+
+    [Message("/profile")]
+    public async Task OnProfileCommand(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Auth auth)
+    {
+        if (!auth.IsSignedIn)
+        {
+            await client.Send("Please type /signin first.");
+            return;
+        }
+
+        var graphClient = await auth.GetUserGraphClient();
+        var user = await graphClient.Me.GetAsync();
+
+        await client.Send($"Hello, {user.DisplayName}! Your email is {user.Mail}");
+    }
+}
+```
+
+## Using Microsoft Graph API
+
+Once authenticated, you can easily call Microsoft Graph:
+
+```csharp showLineNumbers
+[Message("/calendar")]
+public async Task OnCalendarCommand(
+    [Context] MessageActivity activity,
+    [Context] IContext.Client client,
+    [Context] IContext.Auth auth)
+{
+    if (!auth.IsSignedIn)
+    {
+        await client.Send("Please sign in first with /signin");
+        return;
+    }
+
+    var graphClient = await auth.GetUserGraphClient();
+    
+    // Get today's calendar events
+    var today = DateTime.Today;
+    var tomorrow = today.AddDays(1);
+    
+    var events = await graphClient.Me.CalendarView
+        .GetAsync(requestConfiguration =>
+        {
+            requestConfiguration.QueryParameters.StartDateTime = today.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            requestConfiguration.QueryParameters.EndDateTime = tomorrow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            requestConfiguration.QueryParameters.Top = 10;
+        });
+
+    if (events?.Value?.Count > 0)
+    {
+        var eventList = string.Join("\n", 
+            events.Value.Select(e => $"- {e.Subject} at {e.Start.DateTime}"));
+        await client.Send($"Today's events:\n{eventList}");
+    }
+    else
+    {
+        await client.Send("No events scheduled for today.");
+    }
+}
+
+[Message("/email")]
+public async Task OnEmailCommand(
+    [Context] MessageActivity activity,
+    [Context] IContext.Client client,
+    [Context] IContext.Auth auth)
+{
+    if (!auth.IsSignedIn)
+    {
+        await client.Send("Please sign in first with /signin");
+        return;
+    }
+
+    var graphClient = await auth.GetUserGraphClient();
+    
+    // Get recent emails
+    var messages = await graphClient.Me.Messages
+        .GetAsync(requestConfiguration =>
+        {
+            requestConfiguration.QueryParameters.Top = 5;
+            requestConfiguration.QueryParameters.Select = new[] { "subject", "from", "receivedDateTime" };
+            requestConfiguration.QueryParameters.Orderby = new[] { "receivedDateTime DESC" };
+        });
+
+    if (messages?.Value?.Count > 0)
+    {
+        var emailList = string.Join("\n",
+            messages.Value.Select(m => 
+                $"- {m.Subject} from {m.From.EmailAddress.Name}"));
+        await client.Send($"Recent emails:\n{emailList}");
+    }
+    else
+    {
+        await client.Send("No recent emails found.");
+    }
+}
+
+[Message("/files")]
+public async Task OnFilesCommand(
+    [Context] MessageActivity activity,
+    [Context] IContext.Client client,
+    [Context] IContext.Auth auth)
+{
+    if (!auth.IsSignedIn)
+    {
+        await client.Send("Please sign in first with /signin");
+        return;
+    }
+
+    var graphClient = await auth.GetUserGraphClient();
+    
+    // Get recent OneDrive files
+    var items = await graphClient.Me.Drive.Root.Children
+        .GetAsync(requestConfiguration =>
+        {
+            requestConfiguration.QueryParameters.Top = 10;
+            requestConfiguration.QueryParameters.Orderby = new[] { "lastModifiedDateTime DESC" };
+        });
+
+    if (items?.Value?.Count > 0)
+    {
+        var fileList = string.Join("\n",
+            items.Value.Select(i => $"- {i.Name} (modified {i.LastModifiedDateTime})"));
+        await client.Send($"Recent files:\n{fileList}");
+    }
+    else
+    {
+        await client.Send("No files found.");
+    }
+}
+```
+
+## Configuration
+
+### Azure Bot Service OAuth Connection
+
+You need to configure an OAuth connection in Azure Bot Service:
+
+1. Go to your Azure Bot resource
+2. Navigate to **Configuration** > **OAuth Connection Settings**
+3. Click **Add OAuth Connection Settings**
+4. Configure the connection:
+   - **Name**: `graph` (or your chosen name)
+   - **Service Provider**: `Azure Active Directory v2`
+   - **Client ID**: Your Azure AD app client ID
+   - **Client Secret**: Your Azure AD app client secret
+   - **Scopes**: `User.Read Calendar.Read Mail.Read Files.Read` (adjust as needed)
+
+### Application Configuration
+
+```json title="appsettings.json"
+{
+  "ConnectionName": "graph",
+  "MicrosoftAppId": "your-app-id",
+  "MicrosoftAppPassword": "your-app-password",
+  "MicrosoftAppTenantId": "your-tenant-id"
+}
+```
+
+## Advanced Authentication Scenarios
+
+### Custom Scopes
+
+```csharp
+builder.AddTeams(options =>
+{
+    options.OAuth.ConnectionName = "graph";
+    options.OAuth.Scopes = new[] 
+    { 
+        "User.Read", 
+        "Calendars.ReadWrite", 
+        "Mail.Send",
+        "Files.ReadWrite.All"
+    };
+});
+```
+
+### Multiple OAuth Connections
+
+```csharp
+builder.AddTeams(options =>
+{
+    options.OAuth.Connections = new Dictionary<string, OAuthSettings>
+    {
+        ["graph"] = new OAuthSettings 
+        { 
+            Scopes = new[] { "User.Read", "Mail.Read" } 
+        },
+        ["sharepoint"] = new OAuthSettings 
+        { 
+            Scopes = new[] { "Sites.Read.All" } 
+        }
+    };
+});
+
+// Use specific connection
+[Message("/sharepoint")]
+public async Task OnSharePointCommand(
+    [Context] IContext.Auth auth)
+{
+    await auth.SignIn(connectionName: "sharepoint");
+}
+```
+
+### Silent Token Refresh
+
+Teams AI v2 automatically handles token refresh:
+
+```csharp
+[Message("/longrunning")]
+public async Task OnLongRunningCommand(
+    [Context] IContext.Client client,
+    [Context] IContext.Auth auth)
+{
+    if (!auth.IsSignedIn)
+    {
+        await client.Send("Please sign in first.");
+        return;
+    }
+
+    // Token is automatically refreshed if expired
+    var graphClient = await auth.GetUserGraphClient();
+    
+    // Your long-running operation
+    for (int i = 0; i < 10; i++)
+    {
+        await Task.Delay(10000); // 10 seconds
+        
+        // Token refresh handled automatically
+        var user = await graphClient.Me.GetAsync();
+        await client.Send($"Still working... {i+1}/10");
+    }
+
+    await client.Send("Operation complete!");
+}
+```
+
+### Handling Auth Failures
+
+```csharp
+[Message("/secure")]
+public async Task OnSecureCommand(
+    [Context] IContext.Client client,
+    [Context] IContext.Auth auth)
+{
+    try
+    {
+        if (!auth.IsSignedIn)
+        {
+            await auth.SignIn();
+            return;
+        }
+
+        var graphClient = await auth.GetUserGraphClient();
+        var user = await graphClient.Me.GetAsync();
+        
+        await client.Send($"Secure data for {user.DisplayName}");
+    }
+    catch (ServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+    {
+        await auth.SignOut();
+        await client.Send("Your session expired. Please sign in again with /signin");
+    }
+    catch (Exception ex)
+    {
+        await client.Send($"An error occurred: {ex.Message}");
+    }
+}
+```
+
+## Key Benefits
+
+1. **No Dialog Management**: No waterfall steps, component dialogs, or dialog state
+2. **Simple API**: Just `SignIn()`, `SignOut()`, `IsSignedIn`
+3. **Built-in Token Management**: Automatic token refresh and caching
+4. **Easy Graph Access**: Direct Microsoft Graph client integration
+5. **SSO Support**: Seamless Single Sign-On experience
+6. **Better Error Handling**: Clear exception patterns
+
+## Next Steps
+
+- **[State Management](./state-management)** - Persist user data across sessions
+- **[Middleware](./middleware)** - Add custom authentication logic
+- **[Microsoft Graph Documentation](https://learn.microsoft.com/en-us/graph/)** - Learn more about Graph APIs
+
+## Additional Resources
+
+- [User Authentication Guide](../../in-depth-guides/user-authentication)
+- [Azure Bot Service OAuth Setup](https://learn.microsoft.com/en-us/azure/bot-service/bot-builder-authentication)
+- [Microsoft Graph SDK for .NET](https://learn.microsoft.com/en-us/graph/sdks/sdks-overview)

@@ -1,0 +1,573 @@
+---
+sidebar_position: 2
+summary: Migrate from BotBuilder's complex conversation reference handling to Teams AI's simple conversation ID-based proactive messaging.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Proactive Messaging
+
+Proactive messaging allows your bot to send messages to users without them initiating the conversation. In BotBuilder, this requires storing complex `ConversationReference` objects and using `ContinueConversationAsync`. Teams AI Library v2 dramatically simplifies this by only requiring the conversation ID.
+
+## Overview
+
+The key difference:
+
+- **BotBuilder**: Store entire `ConversationReference` objects with service URLs, bot IDs, etc.
+- **Teams AI v2**: Store only the `conversationId` string
+
+## Migration Example
+
+### BotBuilder Approach
+
+<Tabs>
+  <TabItem value="BotBuilder" label="BotBuilder" default>
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder;
+    using Microsoft.Bot.Schema;
+    using Microsoft.Bot.Builder.Integration.AspNet.Core;
+    using System.Collections.Concurrent;
+
+    public class ProactiveBot : ActivityHandler
+    {
+        // Store conversation references
+        private static ConcurrentDictionary<string, ConversationReference> 
+            _conversationReferences = new();
+
+        private readonly IBotFrameworkHttpAdapter _adapter;
+        private readonly string _appId;
+
+        public ProactiveBot(
+            IBotFrameworkHttpAdapter adapter,
+            IConfiguration configuration)
+        {
+            _adapter = adapter;
+            _appId = configuration["MicrosoftAppId"];
+        }
+
+        // Capture conversation reference when user messages
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            // highlight-start
+            // Store the conversation reference
+            var conversationReference = turnContext.Activity.GetConversationReference();
+            _conversationReferences.AddOrUpdate(
+                conversationReference.User.Id,
+                conversationReference,
+                (key, oldValue) => conversationReference);
+            // highlight-end
+
+            await turnContext.SendActivityAsync(
+                "Message received! I'll message you proactively later.",
+                cancellationToken: cancellationToken);
+        }
+
+        // Send proactive message
+        public async Task SendProactiveMessage(string userId, string message)
+        {
+            if (_conversationReferences.TryGetValue(userId, out var conversationReference))
+            {
+                // highlight-start
+                await ((BotAdapter)_adapter).ContinueConversationAsync(
+                    _appId,
+                    conversationReference,
+                    async (context, cancellationToken) =>
+                    {
+                        await context.SendActivityAsync(message, cancellationToken: cancellationToken);
+                    },
+                    default);
+                // highlight-end
+            }
+        }
+    }
+
+    // Controller endpoint to trigger proactive message
+    [ApiController]
+    [Route("api/notify")]
+    public class NotifyController : ControllerBase
+    {
+        private readonly ProactiveBot _bot;
+
+        public NotifyController(ProactiveBot bot)
+        {
+            _bot = bot;
+        }
+
+        [HttpPost("{userId}")]
+        public async Task<IActionResult> Notify(string userId, [FromBody] NotifyRequest request)
+        {
+            await _bot.SendProactiveMessage(userId, request.Message);
+            return Ok();
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Teams AI Library v2 Approach
+
+<Tabs>
+  <TabItem value="Controller" label="Controller Style" default>
+    ```csharp showLineNumbers
+    using Microsoft.Teams.Api.Activities;
+    using Microsoft.Teams.Apps;
+    using Microsoft.Teams.Apps.Annotations;
+
+    [TeamsController("main")]
+    public class MainController
+    {
+        private readonly IStorage<string, object> _storage;
+
+        public MainController(IStorage<string, object> storage)
+        {
+            _storage = storage;
+        }
+
+        // Capture conversation ID when user messages
+        [Message]
+        public async Task OnMessage(
+            [Context] MessageActivity activity,
+            [Context] IContext.Client client)
+        {
+            // highlight-start
+            // Store only the conversation ID
+            _storage.Set($"conv_{activity.From.Id}", activity.Conversation.Id);
+            // highlight-end
+
+            await client.Send("Message received! I'll message you proactively later.");
+        }
+    }
+
+    // Controller endpoint to trigger proactive message
+    [ApiController]
+    [Route("api/notify")]
+    public class NotifyController : ControllerBase
+    {
+        private readonly ITeamsApp _app;
+        private readonly IStorage<string, object> _storage;
+
+        public NotifyController(ITeamsApp app, IStorage<string, object> storage)
+        {
+            _app = app;
+            _storage = storage;
+        }
+
+        [HttpPost("{userId}")]
+        public async Task<IActionResult> Notify(string userId, [FromBody] NotifyRequest request)
+        {
+            // highlight-start
+            var conversationId = _storage.Get<string>($"conv_{userId}");
+            if (conversationId != null)
+            {
+                await _app.Send(conversationId, request.Message);
+            }
+            // highlight-end
+            return Ok();
+        }
+    }
+
+    public record NotifyRequest(string Message);
+    ```
+  </TabItem>
+  <TabItem value="Minimal" label="Minimal Style">
+    ```csharp showLineNumbers
+    var builder = WebApplication.CreateBuilder(args);
+    builder.AddTeams();
+
+    var app = builder.Build();
+    var teams = app.UseTeams();
+
+    // Storage for conversation IDs
+    var conversationIds = new Dictionary<string, string>();
+
+    // Capture conversation ID when user messages
+    teams.OnMessage(async context =>
+    {
+        // highlight-start
+        // Store only the conversation ID
+        conversationIds[context.Activity.From.Id] = context.Activity.Conversation.Id;
+        // highlight-end
+
+        await context.Send("Message received! I'll message you proactively later.");
+    });
+
+    // Controller endpoint to trigger proactive message
+    app.MapPost("/api/notify/{userId}", async (
+        string userId,
+        NotifyRequest request,
+        ITeamsApp teamsApp) =>
+    {
+        // highlight-start
+        if (conversationIds.TryGetValue(userId, out var conversationId))
+        {
+            await teamsApp.Send(conversationId, request.Message);
+            return Results.Ok();
+        }
+        // highlight-end
+        return Results.NotFound();
+    });
+
+    app.Run();
+
+    public record NotifyRequest(string Message);
+    ```
+  </TabItem>
+</Tabs>
+
+## Side-by-Side Comparison
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    using Microsoft.Bot.Builder;
+-    using Microsoft.Bot.Schema;
+-    using System.Collections.Concurrent;
+    // highlight-error-end
+    // highlight-success-start
++    using Microsoft.Teams.Apps;
++    using System.Collections.Generic;
+    // highlight-success-end
+
+    // highlight-error-start
+-    private static ConcurrentDictionary<string, ConversationReference> 
+-        _conversationReferences = new();
+    // highlight-error-end
+    // highlight-success-start
++    private static Dictionary<string, string> 
++        _conversationIds = new();
+    // highlight-success-end
+
+    // highlight-error-start
+-    // Store conversation reference
+-    var conversationReference = turnContext.Activity.GetConversationReference();
+-    _conversationReferences.AddOrUpdate(
+-        conversationReference.User.Id,
+-        conversationReference,
+-        (key, oldValue) => conversationReference);
+    // highlight-error-end
+    // highlight-success-start
++    // Store conversation ID
++    _conversationIds[activity.From.Id] = activity.Conversation.Id;
++    // highlight-success-end
+
+    // highlight-error-start
+-    // Send proactive message
+-    await ((BotAdapter)_adapter).ContinueConversationAsync(
+-        _appId,
+-        conversationReference,
+-        async (context, cancellationToken) =>
+-        {
+-            await context.SendActivityAsync(message, cancellationToken: cancellationToken);
+-        },
+-        default);
+    // highlight-error-end
+    // highlight-success-start
++    // Send proactive message
++    await app.Send(conversationId, message);
++    // highlight-success-end
+    ```
+  </TabItem>
+</Tabs>
+
+## Complete Working Example
+
+Here's a complete example showing how to capture conversation IDs and send proactive notifications:
+
+```csharp showLineNumbers title="Program.cs"
+using Microsoft.Teams.Apps;
+using Microsoft.Teams.Apps.Annotations;
+using Microsoft.Teams.Api.Activities;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.AddTeams();
+
+var app = builder.Build();
+var teams = app.UseTeams();
+
+// In-memory storage (use database in production)
+var userConversations = new Dictionary<string, string>();
+
+// Capture conversation when bot is installed
+teams.OnInstall(async context =>
+{
+    var userId = context.Activity.From.Id;
+    var conversationId = context.Activity.Conversation.Id;
+    
+    userConversations[userId] = conversationId;
+    
+    await context.Send(
+        "Thanks for installing! I'll send you notifications here.");
+});
+
+// Also capture on first message
+teams.OnMessage(async context =>
+{
+    var userId = context.Activity.From.Id;
+    var conversationId = context.Activity.Conversation.Id;
+    
+    if (!userConversations.ContainsKey(userId))
+    {
+        userConversations[userId] = conversationId;
+    }
+    
+    await context.Send($"You said: {context.Activity.Text}");
+});
+
+// API endpoint to send proactive notification
+app.MapPost("/api/notify/{userId}", async (
+    string userId,
+    NotificationRequest request,
+    ITeamsApp teamsApp) =>
+{
+    if (!userConversations.TryGetValue(userId, out var conversationId))
+    {
+        return Results.NotFound(new { error = "User not found" });
+    }
+
+    try
+    {
+        await teamsApp.Send(conversationId, request.Message);
+        return Results.Ok(new { success = true });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
+});
+
+// Scheduled notification example
+app.MapPost("/api/broadcast", async (
+    BroadcastRequest request,
+    ITeamsApp teamsApp) =>
+{
+    var results = new List<string>();
+    
+    foreach (var (userId, conversationId) in userConversations)
+    {
+        try
+        {
+            await teamsApp.Send(conversationId, request.Message);
+            results.Add($"Sent to {userId}");
+        }
+        catch (Exception ex)
+        {
+            results.Add($"Failed for {userId}: {ex.Message}");
+        }
+    }
+    
+    return Results.Ok(new { results });
+});
+
+app.Run();
+
+record NotificationRequest(string Message);
+record BroadcastRequest(string Message);
+```
+
+## Using Persistent Storage
+
+For production scenarios, store conversation IDs in a database:
+
+```csharp showLineNumbers
+using Microsoft.Teams.Apps;
+using Microsoft.EntityFrameworkCore;
+
+public class ConversationDbContext : DbContext
+{
+    public DbSet<UserConversation> UserConversations { get; set; }
+
+    public ConversationDbContext(DbContextOptions<ConversationDbContext> options)
+        : base(options)
+    {
+    }
+}
+
+public class UserConversation
+{
+    public string UserId { get; set; }
+    public string ConversationId { get; set; }
+    public DateTime LastActivity { get; set; }
+}
+
+[TeamsController("main")]
+public class MainController
+{
+    private readonly ConversationDbContext _dbContext;
+
+    public MainController(ConversationDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    [Install]
+    public async Task OnInstall(
+        [Context] InstallUpdateActivity activity,
+        [Context] IContext.Client client)
+    {
+        var userConversation = new UserConversation
+        {
+            UserId = activity.From.Id,
+            ConversationId = activity.Conversation.Id,
+            LastActivity = DateTime.UtcNow
+        };
+
+        var existing = await _dbContext.UserConversations
+            .FirstOrDefaultAsync(uc => uc.UserId == activity.From.Id);
+
+        if (existing != null)
+        {
+            existing.ConversationId = activity.Conversation.Id;
+            existing.LastActivity = DateTime.UtcNow;
+        }
+        else
+        {
+            _dbContext.UserConversations.Add(userConversation);
+        }
+
+        await _dbContext.SaveChangesAsync();
+        await client.Send("Thanks for installing!");
+    }
+}
+
+// Notification service
+public class NotificationService
+{
+    private readonly ITeamsApp _app;
+    private readonly ConversationDbContext _dbContext;
+
+    public NotificationService(ITeamsApp app, ConversationDbContext dbContext)
+    {
+        _app = app;
+        _dbContext = dbContext;
+    }
+
+    public async Task NotifyUserAsync(string userId, string message)
+    {
+        var userConversation = await _dbContext.UserConversations
+            .FirstOrDefaultAsync(uc => uc.UserId == userId);
+
+        if (userConversation != null)
+        {
+            await _app.Send(userConversation.ConversationId, message);
+        }
+    }
+
+    public async Task BroadcastAsync(string message)
+    {
+        var conversations = await _dbContext.UserConversations.ToListAsync();
+
+        foreach (var conversation in conversations)
+        {
+            try
+            {
+                await _app.Send(conversation.ConversationId, message);
+            }
+            catch (Exception ex)
+            {
+                // Log error
+            }
+        }
+    }
+}
+```
+
+## Advanced Scenarios
+
+### Scheduled Notifications with Background Service
+
+```csharp showLineNumbers
+public class ScheduledNotificationService : BackgroundService
+{
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<ScheduledNotificationService> _logger;
+
+    public ScheduledNotificationService(
+        IServiceProvider serviceProvider,
+        ILogger<ScheduledNotificationService> logger)
+    {
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromHours(24), stoppingToken);
+
+            using var scope = _serviceProvider.CreateScope();
+            var app = scope.ServiceProvider.GetRequiredService<ITeamsApp>();
+            var dbContext = scope.ServiceProvider.GetRequiredService<ConversationDbContext>();
+
+            var conversations = await dbContext.UserConversations.ToListAsync(stoppingToken);
+
+            foreach (var conversation in conversations)
+            {
+                try
+                {
+                    await app.Send(
+                        conversation.ConversationId,
+                        "Your daily reminder!");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, 
+                        "Failed to send notification to {UserId}", 
+                        conversation.UserId);
+                }
+            }
+        }
+    }
+}
+
+// Register in Program.cs
+builder.Services.AddHostedService<ScheduledNotificationService>();
+```
+
+### Sending Rich Messages Proactively
+
+```csharp showLineNumbers
+using Microsoft.Teams.Cards;
+using Microsoft.Teams.Cards.Elements;
+
+public async Task SendRichNotificationAsync(string conversationId)
+{
+    var card = new AdaptiveCard(
+        new TextBlock("Notification") 
+        { 
+            Size = TextSize.Large, 
+            Weight = TextWeight.Bolder 
+        },
+        new TextBlock("You have a new update!"),
+        new FactSet(
+            new Fact("Time", DateTime.Now.ToString("g")),
+            new Fact("Type", "System Alert")
+        )
+    );
+
+    await _app.Send(conversationId, card);
+}
+```
+
+## Key Benefits of Teams AI v2 Proactive Messaging
+
+1. **Simpler Storage**: Just store a string instead of complex objects
+2. **Less Code**: No adapter management or continuation logic
+3. **Type Safety**: Strongly-typed conversation IDs
+4. **Cleaner API**: Single method call to send messages
+5. **Better Testability**: Easy to mock and test
+
+## Next Steps
+
+- **[API Access](./the-api-client)** - Using the Teams API client
+- **[User Authentication](../user-authentication)** - Implement OAuth flows
+- **[State Management](../state-management)** - Persist data across conversations
+
+## Additional Resources
+
+- [Proactive Messaging Documentation](../../../essentials/sending-messages/proactive-messaging)
+- [Background Services in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services)

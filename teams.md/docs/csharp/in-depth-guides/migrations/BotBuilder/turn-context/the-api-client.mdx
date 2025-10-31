@@ -1,0 +1,538 @@
+---
+sidebar_position: 3
+summary: Replace BotBuilder's static TeamsInfo class with Teams AI's injected ApiClient for cleaner API interactions.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# The API Client
+
+BotBuilder provides a static `TeamsInfo` class for making API calls to Microsoft Teams services. Teams AI Library v2 takes a more modern approach by injecting an `IContext.Api` client into your handlers, providing a fluent, discoverable API surface.
+
+## Overview
+
+The key differences:
+
+- **BotBuilder**: Static methods requiring `ITurnContext` parameter
+- **Teams AI v2**: Injected API client with fluent interface
+
+## Basic API Access
+
+### Getting Conversation Members
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="Diff" label="Diff View" default>
+    ```csharp
+    // highlight-error-start
+-    using Microsoft.Bot.Builder.Teams;
+-
+-    protected override async Task OnMessageActivityAsync(
+-        ITurnContext<IMessageActivity> turnContext,
+-        CancellationToken cancellationToken)
+-    {
+-        var members = await TeamsInfo.GetMembersAsync(
+-            turnContext,
+-            cancellationToken);
+-
+-        var memberList = string.Join(", ", members.Select(m => m.Name));
+-        await turnContext.SendActivityAsync(
+-            $"Members: {memberList}",
+-            cancellationToken: cancellationToken);
+-    }
+    // highlight-error-end
+    // highlight-success-start
++    [Message]
++    public async Task OnMessage(
++        [Context] MessageActivity activity,
++        [Context] IContext.Client client,
++        [Context] IContext.Api api)
++    {
++        var members = await api.Conversations
++            .Members(activity.Conversation.Id)
++            .Get();
++
++        var memberList = string.Join(", ", members.Select(m => m.Name));
++        await client.Send($"Members: {memberList}");
++    }
++    // highlight-success-end
++    ```
+  </TabItem>
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    using Microsoft.Bot.Builder.Teams;
+
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        // highlight-start
+        var members = await TeamsInfo.GetMembersAsync(
+            turnContext,
+            cancellationToken);
+        // highlight-end
+
+        var memberList = string.Join(", ", members.Select(m => m.Name));
+        await turnContext.SendActivityAsync(
+            $"Members: {memberList}",
+            cancellationToken: cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2">
+    ```csharp showLineNumbers
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Api api)
+    {
+        // highlight-start
+        var members = await api.Conversations
+            .Members(activity.Conversation.Id)
+            .Get();
+        // highlight-end
+
+        var memberList = string.Join(", ", members.Select(m => m.Name));
+        await client.Send($"Members: {memberList}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Common API Operations
+
+### Get Team Details
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var teamDetails = await TeamsInfo.GetTeamDetailsAsync(
+        turnContext,
+        turnContext.Activity.TeamsGetTeamInfo().Id,
+        cancellationToken);
+
+    await turnContext.SendActivityAsync(
+        $"Team: {teamDetails.Name}, ID: {teamDetails.Id}",
+        cancellationToken: cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var teamId = activity.ChannelData?.Team?.Id;
+    if (teamId != null)
+    {
+        var teamDetails = await api.Teams(teamId).Get();
+        
+        await client.Send($"Team: {teamDetails.Name}, ID: {teamDetails.Id}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Get Team Channels
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var teamId = turnContext.Activity.TeamsGetTeamInfo().Id;
+    var channels = await TeamsInfo.GetTeamChannelsAsync(
+        turnContext,
+        teamId,
+        cancellationToken);
+
+    var channelList = string.Join(", ", channels.Select(c => c.Name));
+    await turnContext.SendActivityAsync(
+        $"Channels: {channelList}",
+        cancellationToken: cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var teamId = activity.ChannelData?.Team?.Id;
+    if (teamId != null)
+    {
+        var channels = await api.Teams(teamId).Channels().Get();
+        
+        var channelList = string.Join(", ", channels.Select(c => c.Name));
+        await client.Send($"Channels: {channelList}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Get Member Details
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var member = await TeamsInfo.GetMemberAsync(
+        turnContext,
+        turnContext.Activity.From.Id,
+        cancellationToken);
+
+    await turnContext.SendActivityAsync(
+        $"User: {member.Name}, Email: {member.Email}",
+        cancellationToken: cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var member = await api.Conversations
+        .Members(activity.Conversation.Id)
+        .Member(activity.From.Id)
+        .Get();
+
+    await client.Send($"User: {member.Name}, Email: {member.Email}");
+    ```
+  </TabItem>
+</Tabs>
+
+### Send Message to Channel
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var teamId = turnContext.Activity.TeamsGetTeamInfo().Id;
+    var channelId = "19:channel-id-here@thread.tacv2";
+
+    var conversationParameters = new ConversationParameters
+    {
+        IsGroup = true,
+        ChannelData = new TeamsChannelData
+        {
+            Channel = new ChannelInfo(channelId)
+        },
+        Activity = MessageFactory.Text("Hello from bot!")
+    };
+
+    var conversationReference = await ((CloudAdapter)turnContext.Adapter)
+        .CreateConversationAsync(
+            turnContext.Activity.ServiceUrl,
+            conversationParameters,
+            async (newContext, ct) =>
+            {
+                await newContext.SendActivityAsync(
+                    "Posted to channel!", 
+                    cancellationToken: ct);
+            },
+            cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var channelId = "19:channel-id-here@thread.tacv2";
+
+    await api.Conversations
+        .Activities(channelId)
+        .Post(new MessageActivity { Text = "Hello from bot!" });
+
+    await client.Send("Posted to channel!");
+    ```
+  </TabItem>
+</Tabs>
+
+## Complete API Comparison Table
+
+| BotBuilder Method | Teams AI v2 API | Description |
+|------------------|-----------------|-------------|
+| `TeamsInfo.GetMembersAsync()` | `api.Conversations.Members(id).Get()` | Get conversation members |
+| `TeamsInfo.GetMemberAsync()` | `api.Conversations.Members(id).Member(userId).Get()` | Get specific member |
+| `TeamsInfo.GetTeamDetailsAsync()` | `api.Teams(teamId).Get()` | Get team information |
+| `TeamsInfo.GetTeamChannelsAsync()` | `api.Teams(teamId).Channels().Get()` | Get team channels |
+| `TeamsInfo.GetMeetingInfoAsync()` | `api.Meetings(meetingId).Get()` | Get meeting details |
+| `TeamsInfo.GetPagedMembersAsync()` | `api.Conversations.Members(id).Get(pageSize, continuationToken)` | Get paginated members |
+| `turnContext.SendActivityAsync()` | `api.Conversations.Activities(id).Post()` | Send activity to conversation |
+| `turnContext.UpdateActivityAsync()` | `api.Conversations.Activities(id, activityId).Put()` | Update existing activity |
+| `turnContext.DeleteActivityAsync()` | `api.Conversations.Activities(id, activityId).Delete()` | Delete activity |
+
+## Advanced API Usage
+
+### Paginated Results
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var allMembers = new List<TeamsChannelAccount>();
+    string continuationToken = null;
+
+    do
+    {
+        var pagedMembers = await TeamsInfo.GetPagedMembersAsync(
+            turnContext,
+            pageSize: 100,
+            continuationToken: continuationToken,
+            cancellationToken: cancellationToken);
+
+        allMembers.AddRange(pagedMembers.Members);
+        continuationToken = pagedMembers.ContinuationToken;
+    }
+    while (!string.IsNullOrEmpty(continuationToken));
+
+    await turnContext.SendActivityAsync(
+        $"Total members: {allMembers.Count}",
+        cancellationToken: cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var allMembers = new List<ChannelAccount>();
+    string? continuationToken = null;
+
+    do
+    {
+        var pagedResult = await api.Conversations
+            .Members(activity.Conversation.Id)
+            .Get(pageSize: 100, continuationToken: continuationToken);
+
+        allMembers.AddRange(pagedResult.Members);
+        continuationToken = pagedResult.ContinuationToken;
+    }
+    while (!string.IsNullOrEmpty(continuationToken));
+
+    await client.Send($"Total members: {allMembers.Count}");
+    ```
+  </TabItem>
+</Tabs>
+
+### Working with Attachments
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var attachment = turnContext.Activity.Attachments?.FirstOrDefault();
+    if (attachment != null)
+    {
+        // Get attachment data
+        var attachmentData = await ((CloudAdapter)turnContext.Adapter)
+            .GetActivityMembersAsync(
+                turnContext,
+                turnContext.Activity.Id,
+                cancellationToken);
+        
+        await turnContext.SendActivityAsync(
+            $"Received attachment: {attachment.Name}",
+            cancellationToken: cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var attachment = activity.Attachments?.FirstOrDefault();
+    if (attachment != null)
+    {
+        // Get attachment URL or process attachment
+        await client.Send($"Received attachment: {attachment.Name}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Create New Conversation
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    var conversationParameters = new ConversationParameters
+    {
+        Bot = turnContext.Activity.Recipient,
+        Members = new[] { turnContext.Activity.From },
+        ChannelData = new TeamsChannelData
+        {
+            Tenant = new TenantInfo { Id = turnContext.Activity.Conversation.TenantId }
+        }
+    };
+
+    var conversationReference = await ((CloudAdapter)turnContext.Adapter)
+        .CreateConversationAsync(
+            turnContext.Activity.ServiceUrl,
+            conversationParameters,
+            async (newContext, ct) =>
+            {
+                await newContext.SendActivityAsync(
+                    "New conversation created!",
+                    cancellationToken: ct);
+            },
+            cancellationToken);
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    var newConversation = await api.Conversations.Create(new ConversationParameters
+    {
+        Members = new[] { activity.From },
+        ChannelData = new TeamsChannelData
+        {
+            Tenant = new TenantInfo { Id = activity.Conversation.TenantId }
+        }
+    });
+
+    await api.Conversations
+        .Activities(newConversation.Id)
+        .Post(new MessageActivity { Text = "New conversation created!" });
+    ```
+  </TabItem>
+</Tabs>
+
+## Fluent API Pattern
+
+Teams AI v2's API client uses a fluent pattern that mirrors the REST API structure:
+
+```csharp
+// Conversations
+await api.Conversations.Get();
+await api.Conversations.Create(parameters);
+await api.Conversations.Members(conversationId).Get();
+await api.Conversations.Activities(conversationId).Post(activity);
+await api.Conversations.Activities(conversationId, activityId).Put(activity);
+await api.Conversations.Activities(conversationId, activityId).Delete();
+
+// Teams
+await api.Teams(teamId).Get();
+await api.Teams(teamId).Channels().Get();
+await api.Teams(teamId).Channels(channelId).Get();
+await api.Teams(teamId).Members().Get();
+
+// Meetings
+await api.Meetings(meetingId).Get();
+await api.Meetings(meetingId).Participants().Get();
+```
+
+## Error Handling
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp showLineNumbers
+    try
+    {
+        var members = await TeamsInfo.GetMembersAsync(
+            turnContext,
+            cancellationToken);
+    }
+    catch (ErrorResponseException ex)
+    {
+        await turnContext.SendActivityAsync(
+            $"Error: {ex.Body.Error.Message}",
+            cancellationToken: cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp showLineNumbers
+    try
+    {
+        var members = await api.Conversations
+            .Members(activity.Conversation.Id)
+            .Get();
+    }
+    catch (ApiException ex)
+    {
+        await client.Send($"Error: {ex.Message}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Dependency Injection
+
+The API client is automatically available through dependency injection:
+
+```csharp showLineNumbers
+[TeamsController("main")]
+public class MainController
+{
+    private readonly ILogger<MainController> _logger;
+
+    public MainController(ILogger<MainController> logger)
+    {
+        _logger = logger;
+    }
+
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Api api)
+    {
+        try
+        {
+            var members = await api.Conversations
+                .Members(activity.Conversation.Id)
+                .Get();
+
+            _logger.LogInformation(
+                "Retrieved {Count} members", 
+                members.Count);
+
+            await client.Send($"Found {members.Count} members");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting members");
+            await client.Send("An error occurred");
+        }
+    }
+}
+```
+
+## Testing
+
+The API client interface makes testing much easier:
+
+```csharp showLineNumbers
+public class MainControllerTests
+{
+    [Fact]
+    public async Task OnMessage_RetrievesMembersSuccessfully()
+    {
+        // Arrange
+        var mockApi = new Mock<IContext.Api>();
+        var mockMembers = new Mock<IConversationMembersApi>();
+        
+        mockApi.Setup(a => a.Conversations.Members(It.IsAny<string>()))
+            .Returns(mockMembers.Object);
+        
+        mockMembers.Setup(m => m.Get())
+            .ReturnsAsync(new List<ChannelAccount>
+            {
+                new ChannelAccount { Name = "User 1" },
+                new ChannelAccount { Name = "User 2" }
+            });
+
+        var mockClient = new Mock<IContext.Client>();
+        var controller = new MainController();
+        var activity = new MessageActivity 
+        { 
+            Conversation = new ConversationAccount { Id = "conv-123" } 
+        };
+
+        // Act
+        await controller.OnMessage(activity, mockClient.Object, mockApi.Object);
+
+        // Assert
+        mockClient.Verify(
+            c => c.Send("Found 2 members"), 
+            Times.Once);
+    }
+}
+```
+
+## Key Benefits
+
+1. **Discoverable API**: IntelliSense guides you through available operations
+2. **Type Safety**: Strongly-typed requests and responses
+3. **Fluent Interface**: Readable, chainable API calls
+4. **No Static Methods**: Better testability and dependency injection
+5. **Consistent Patterns**: Same patterns across all API operations
+6. **Less Boilerplate**: No need to pass context everywhere
+
+## Next Steps
+
+- **[User Authentication](../user-authentication)** - Implement OAuth flows
+- **[State Management](../state-management)** - Persist data across conversations
+- **[Middleware](../middleware)** - Add custom processing pipelines
+
+## Additional Resources
+
+- [API Client Documentation](../../../essentials/api)
+- [Microsoft Teams API Reference](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/conversation-basics)

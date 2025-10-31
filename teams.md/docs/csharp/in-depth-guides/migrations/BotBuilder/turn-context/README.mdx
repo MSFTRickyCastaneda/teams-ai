@@ -1,0 +1,420 @@
+---
+sidebar_position: 3
+summary: Understand how Teams AI's IContext replaces BotBuilder's ITurnContext for handling incoming activities and accessing APIs.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Turn Context
+
+In BotBuilder, the `ITurnContext` is the central object passed to all activity handlers, providing access to the incoming activity, bot state, and methods for sending responses. Teams AI Library v2 uses a similar but more streamlined concept with `IContext`, which is injected into your handlers through the `[Context]` attribute or available through the context parameter in minimal style handlers.
+
+## Context Overview
+
+### BotBuilder Approach
+
+```csharp
+protected override async Task OnMessageActivityAsync(
+    ITurnContext<IMessageActivity> turnContext,
+    CancellationToken cancellationToken)
+{
+    // Access activity
+    var text = turnContext.Activity.Text;
+    
+    // Send response
+    await turnContext.SendActivityAsync("Hello!");
+    
+    // Access conversation reference
+    var conversationId = turnContext.Activity.Conversation.Id;
+}
+```
+
+### Teams AI Library v2 Approach
+
+<Tabs>
+  <TabItem value="Controller" label="Controller Style" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        // Access activity directly
+        var text = activity.Text;
+        
+        // Send response
+        await client.Send("Hello!");
+        
+        // Access conversation ID
+        var conversationId = activity.Conversation.Id;
+    }
+    ```
+  </TabItem>
+  <TabItem value="Minimal" label="Minimal Style">
+    ```csharp
+    app.OnMessage(async context =>
+    {
+        // Access activity through context
+        var text = context.Activity.Text;
+        
+        // Send response
+        await context.Send("Hello!");
+        
+        // Access conversation ID
+        var conversationId = context.Activity.Conversation.Id;
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+## Key Differences
+
+| BotBuilder | Teams AI v2 | Description |
+|------------|-------------|-------------|
+| `ITurnContext` | `IContext` | Main context interface |
+| `turnContext.Activity` | `MessageActivity` parameter or `context.Activity` | Strongly-typed activity |
+| `turnContext.SendActivityAsync()` | `client.Send()` or `context.Send()` | Send messages |
+| `turnContext.Adapter` | Built into framework | Adapter access |
+| `TurnState` | `IStorage<string, object>` | State management |
+
+## Context Injection
+
+Teams AI Library v2 uses ASP.NET Core's dependency injection to provide context components. You can inject exactly what you need:
+
+<Tabs>
+  <TabItem value="Controller" label="Controller Style" default>
+    ```csharp
+    [TeamsController("main")]
+    public class MainController
+    {
+        [Message]
+        public async Task OnMessage(
+            [Context] MessageActivity activity,        // The incoming activity
+            [Context] IContext.Client client,          // For sending messages
+            [Context] IContext.Api api,                // For API calls
+            [Context] IStorage<string, object> storage) // For state management
+        {
+            // Use only what you need
+            await client.Send($"You said: {activity.Text}");
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Minimal" label="Minimal Style">
+    ```csharp
+    app.OnMessage(async context =>
+    {
+        // All context components available through context object
+        var activity = context.Activity;
+        var client = context;       // IContext.Client
+        var api = context.Api;      // IContext.Api
+        var storage = context.Storage; // IStorage
+        
+        await context.Send($"You said: {activity.Text}");
+    });
+    ```
+  </TabItem>
+</Tabs>
+
+## Accessing Activity Information
+
+### Basic Activity Properties
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        var messageText = turnContext.Activity.Text;
+        var userName = turnContext.Activity.From.Name;
+        var userId = turnContext.Activity.From.Id;
+        var conversationId = turnContext.Activity.Conversation.Id;
+        var channelId = turnContext.Activity.ChannelId;
+        var timestamp = turnContext.Activity.Timestamp;
+        
+        await turnContext.SendActivityAsync($"Hello {userName}!");
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        var messageText = activity.Text;
+        var userName = activity.From.Name;
+        var userId = activity.From.Id;
+        var conversationId = activity.Conversation.Id;
+        var channelId = activity.ChannelId;
+        var timestamp = activity.Timestamp;
+        
+        await client.Send($"Hello {userName}!");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Teams-Specific Information
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        var teamsChannelData = turnContext.Activity.GetChannelData<TeamsChannelData>();
+        var teamId = teamsChannelData?.Team?.Id;
+        var channelId = teamsChannelData?.Channel?.Id;
+        var tenantId = teamsChannelData?.Tenant?.Id;
+        
+        await turnContext.SendActivityAsync($"Team ID: {teamId}");
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        var teamId = activity.ChannelData?.Team?.Id;
+        var channelId = activity.ChannelData?.Channel?.Id;
+        var tenantId = activity.ChannelData?.Tenant?.Id;
+        
+        await client.Send($"Team ID: {teamId}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## State Management
+
+BotBuilder uses `TurnState` and state property accessors. Teams AI Library v2 provides a cleaner storage interface:
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    public class MyBot : ActivityHandler
+    {
+        private readonly BotState _conversationState;
+        private readonly IStatePropertyAccessor<ConversationData> _conversationDataAccessor;
+
+        public MyBot(ConversationState conversationState)
+        {
+            _conversationState = conversationState;
+            _conversationDataAccessor = conversationState.CreateProperty<ConversationData>("ConversationData");
+        }
+
+        protected override async Task OnMessageActivityAsync(
+            ITurnContext<IMessageActivity> turnContext,
+            CancellationToken cancellationToken)
+        {
+            // Get state
+            var conversationData = await _conversationDataAccessor.GetAsync(
+                turnContext, 
+                () => new ConversationData(),
+                cancellationToken);
+            
+            conversationData.MessageCount++;
+            
+            // Save state
+            await _conversationState.SaveChangesAsync(turnContext, false, cancellationToken);
+            
+            await turnContext.SendActivityAsync($"Message count: {conversationData.MessageCount}");
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IStorage<string, object> storage)
+    {
+        // Get state (automatically managed)
+        var messageCount = storage.Get<int>("MessageCount");
+        messageCount++;
+        
+        // Set state (automatically saved)
+        storage.Set("MessageCount", messageCount);
+        
+        await client.Send($"Message count: {messageCount}");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Response Methods
+
+### Sending Typing Indicator
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        await turnContext.SendActivitiesAsync(
+            new Activity[] { 
+                new Activity { Type = ActivityTypes.Typing } 
+            },
+            cancellationToken);
+            
+        // Do some work...
+        
+        await turnContext.SendActivityAsync("Done!", cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        await client.Typing();
+        
+        // Do some work...
+        
+        await client.Send("Done!");
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Updating a Message
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        var reply = await turnContext.SendActivityAsync(
+            "Processing...", 
+            cancellationToken);
+        
+        // Do some work...
+        
+        var updatedActivity = MessageFactory.Text("Complete!");
+        updatedActivity.Id = reply.Id;
+        
+        await turnContext.UpdateActivityAsync(updatedActivity, cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Api api)
+    {
+        var reply = await client.Send("Processing...");
+        
+        // Do some work...
+        
+        await api.Conversations
+            .Activities(activity.Conversation.Id, reply.Id)
+            .Put(new MessageActivity { Text = "Complete!" });
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Deleting a Message
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        var reply = await turnContext.SendActivityAsync("This will be deleted", cancellationToken);
+        
+        await Task.Delay(3000);
+        
+        await turnContext.DeleteActivityAsync(reply.Id, cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client,
+        [Context] IContext.Api api)
+    {
+        var reply = await client.Send("This will be deleted");
+        
+        await Task.Delay(3000);
+        
+        await api.Conversations
+            .Activities(activity.Conversation.Id, reply.Id)
+            .Delete();
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Cancellation Tokens
+
+BotBuilder requires explicit `CancellationToken` parameters. Teams AI Library v2 handles this automatically:
+
+<Tabs groupId="migration-comparison">
+  <TabItem value="BotBuilder" label="BotBuilder">
+    ```csharp
+    protected override async Task OnMessageActivityAsync(
+        ITurnContext<IMessageActivity> turnContext,
+        CancellationToken cancellationToken)
+    {
+        await turnContext.SendActivityAsync("Hello!", cancellationToken);
+        await SaveStateAsync(cancellationToken);
+        await CallExternalApiAsync(cancellationToken);
+    }
+    ```
+  </TabItem>
+  <TabItem value="Teams AI" label="Teams AI v2" default>
+    ```csharp
+    [Message]
+    public async Task OnMessage(
+        [Context] MessageActivity activity,
+        [Context] IContext.Client client)
+    {
+        // No explicit cancellation token needed
+        await client.Send("Hello!");
+        await SaveStateAsync();
+        await CallExternalApiAsync();
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+Learn more about specific context operations:
+
+- **[Sending Activities](./sending-activities)** - Different ways to send messages
+- **[Proactive Messaging](./proactive-activities)** - Send messages without user trigger
+- **[API Access](./the-api-client)** - Using the Teams API client
+
+## Additional Resources
+
+- [Activity Handlers](../activity-handlers)
+- [Sending Messages](../../../essentials/sending-messages)
+- [State Management Documentation](../state-management)
